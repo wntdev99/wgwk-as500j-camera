@@ -11,7 +11,8 @@ optical_zoom/
 │   ├── 01-hardware-spec.md      ← 카메라 하드웨어 사양
 │   ├── 02-http-api.md           ← HTTP API(HAPI) 정리
 │   ├── 03-netsdk.md             ← NETSDK(C/C++) 정리
-│   └── 04-zoom-control-guide.md ← 광학 줌 제어 통합 가이드
+│   ├── 04-zoom-control-guide.md ← 광학 줌 제어 통합 가이드
+│   └── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
 └── ref/                         ← 원본 벤더 자료
     ├── http_api.pdf             ← HAPI 사양서 PDF(VER 1.5, 2024-03-18)
     ├── http_api_text.txt        ← 위 PDF 텍스트 추출본(134 KB)
@@ -50,6 +51,10 @@ optical_zoom/
    - 자세한 내용: [`03-netsdk.md`](03-netsdk.md)
 
 두 경로의 비교 및 줌 제어 통합 가이드는 [`04-zoom-control-guide.md`](04-zoom-control-guide.md) 참고.
+
+## 첫 수령 시 브링업 절차
+
+카메라 모듈을 처음 수령했을 때 Ubuntu 24.04 환경에서 하드웨어 연결부터 광학 줌 동작 검증까지 단계별로 수행하는 절차는 [`05-bringup-test.md`](05-bringup-test.md)에 정리되어 있습니다.
 
 ## 원본 자료 출처 및 신뢰도
 
