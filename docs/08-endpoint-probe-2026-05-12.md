@@ -286,6 +286,81 @@ Body: {
 1. **클라이언트 측 variance plateau 감지** — `Camera.wait_for_af_lock()` (한계는 `docs/09-library-api.md §11.A` 참고).
 2. **NETSDK 8091 채널 풀 구현** — `CMD_NOTIFY_AF_*` 가능성 있으나 큰 작업.
 
+## 8.C 포트 8091 (NETSDK Control Protocol) — Phase 1 수동 관찰
+
+`Camera.wait_for_af_lock()`이 클라이언트 측 plateau 휴리스틱에 의존하는 근본 이유는 AF lock 푸시 채널이 HAPI / SCF / ONVIF / Event subscription 어느 쪽에도 없기 때문이다 (§8.5, §8.B). 마지막 후보가 **NETSDK 포트 8091** — `libNetSDK_no_live555.so`가 사용하는 XML_TOPSEE TCP 채널이다. 본 절은 이 채널에 직접 진입을 시도한 결과.
+
+### Phase 1 목적
+
+인증 없이 또는 평문 인증으로 8091에 진입해 `CMD_ZOOM_MULTIPLE_NOTIFY`(PTZ_BASE+6) / `CMD_SEND_ADVANCE_PTZ_STATUS`(1138/1139) / AF 관련 푸시가 수신되는지 확인. 가능하면 Phase 2(라이브러리 통합)로 진행, 불가능하면 추가 작업의 ROI를 평가.
+
+### 발견 1: outbound 프레임 형식 확정
+
+다양한 송신 형식 시도:
+
+| 시도 | 결과 |
+|---|---|
+| 평문 XML | Connection reset |
+| BE 4-byte length + XML | Connection reset |
+| LE 4-byte length + XML | Connection reset |
+| `MAGIC(58 91 58 51) + LE length + XML(GB2312)` | **200 응답 정상 수신** |
+| `MAGIC + BE length + XML` | Connection reset |
+
+**확정 — 본 채널의 송수신 프레임 형식**:
+```
++--------+--------+--------+--------+
+| 0x58   | 0x91   | 0x58   | 0x51   |  4-byte magic
++--------+--------+--------+--------+
+|       payload length (LE u32)      |
++--------+--------+--------+--------+
+|         XML payload (GB2312)       |
+|        (<?xml ...?><XML_TOPSEE>)   |
++--------+--------+--------+--------+
+```
+
+### 발견 2: LOGIN 응답은 정상 수신, 인증은 거부
+
+`Msg_type="LOGIN_MESSAGE" Msg_code="101"` 송신 → 서버는 같은 Msg_type/Msg_code로 응답하되 **`Msg_flag="-1"`** + 빈 `<MESSAGE_BODY></MESSAGE_BODY>`. 약 13초 후 서버가 socket close.
+
+8가지 인증 변형 모두 동일한 `Msg_flag="-1"`:
+
+| 변형 | 결과 |
+|---|---|
+| `UserName="admin" Password="123456"` | -1 |
+| `Password=""` | -1 |
+| `Password="<md5(123456)=e10adc...>"` | -1 |
+| `Password="123456" Mode="0"` | -1 |
+| `UserName/Password = SCF 16-hex 토큰 (52851d.../a17fac...)` | -1 |
+| 소문자 `userid`/`passwd` | -1 |
+| `+ ProgramType="0"` | -1 |
+| `+ ClientType="0"` | -1 |
+
+**평문/단순 해시/SCF 토큰 모두 거부됨**. SDK 헤더 `IP_NET_DVR_Login_Encrypt(..., szKeyValue)` + `IP_NET_DVR_EXCHANGE_Encrypt(lUserID)` + `CMD_ENCRYPT_EXCHANGE_KEY=150` 함수군이 시사하듯 **DES 키 교환 + 암호화 로그인 메커니즘이 필수**로 추정.
+
+### 발견 3: 인증 없이 푸시 수신 불가
+
+LOGIN 응답 수신 직후 30초간 listen하며 `zoom_in/out 800ms` × 2, `set_af(False/True)` 토글을 발사. 추가 프레임 0건 → server는 인증 실패 상태에서 어떤 푸시도 보내지 않는다.
+
+(첫 probe(2025-05-12 이전)에서 받았던 `ALARM_REPORT_MESSAGE eth0 link up`은 일회성 — 네트워크 상태가 막 변경된 직후 인증 무관하게 푸시되는 NetworkDetect 알람이었던 것으로 추정. 재현 안 됨.)
+
+### Phase 2 비용 추정
+
+| 옵션 | 작업량 | 결과 보장 |
+|---|---|---|
+| B. NETSDK demo_test aarch64 cross-compile + qemu-user → 정식 로그인 패킷 캡처 분석 | 1~2일 | 패킷에 키 교환 노출되면 ✓, 아니면 C로 |
+| C. `libNetSDK_no_live555.so` Ghidra/IDA disassembly로 인증·세션·CMD 디스패치 전체 reverse engineering | 수일~수주 | AF lock 푸시가 펌웨어에 실제 구현돼 있어야 의미 있음. 미보장 |
+
+**ROI 평가**: AF lock의 정확한 신호가 운영 가치를 일주 작업으로 정당화할 만큼 critical하지 않다. `wait_for_af_lock` variance plateau가 충분하며, 사용 시 한계는 `docs/09-library-api.md §11.A`에 명시. **Phase 2는 deferred**.
+
+### 향후 재개 조건
+
+다음 중 하나가 성립하면 재개 가치 있음:
+- 정확한 zoom motor position이 필수가 되는 운영 요구 등장
+- AF lock event가 control loop의 critical path에 필요한 사용처
+- aarch64 SBC(Jetson 등)로 배포 시 NETSDK 직접 링크가 자연스러운 옵션이 됨
+
+그 외엔 본 라이브러리의 HAPI + SCF 추상화로 운영 충분.
+
 ## 8.6 재현 명령
 
 ```bash
