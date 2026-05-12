@@ -10,7 +10,7 @@ from wgwk_camera import Camera
 
 
 def main():
-    with Camera("192.168.8.213") as cam:
+    with Camera("192.168.8.101") as cam:
         # 1) 디바이스 정보 확인
         info = cam.info()
         print(f"model={info['device_type']}  fs={info['fsversion']}")

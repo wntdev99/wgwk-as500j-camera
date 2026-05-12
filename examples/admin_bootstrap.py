@@ -19,7 +19,7 @@ from wgwk_camera import ALL_PROFILES, Camera, PRECISION_PROFILE
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--host", default="192.168.8.213")
+    p.add_argument("--host", default="192.168.8.101")
     p.add_argument("--profile", default="precision",
                    choices=list(ALL_PROFILES.keys()))
     p.add_argument("--apply", action="store_true",

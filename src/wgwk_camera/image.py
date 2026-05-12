@@ -56,7 +56,7 @@ class ImageClient:
         get_ptz_config / get_media_video_config  ← XML 전체
     """
 
-    host: str = "192.168.8.213"
+    host: str = "192.168.8.101"
     port: int = 80
     userid: str = ""
     passwd: str = ""

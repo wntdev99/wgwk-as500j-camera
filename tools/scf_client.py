@@ -37,7 +37,7 @@ from typing import Any
 import requests
 
 
-DEFAULT_HOST = "192.168.8.213"
+DEFAULT_HOST = "192.168.8.101"
 DEFAULT_PORT = 80
 HTTP_TIMEOUT_SEC = 5
 
@@ -69,7 +69,7 @@ class SCFClient:
     """MC800S5 SCF 채널 클라이언트.
 
     Usage:
-        with SCFClient(host="192.168.8.213",
+        with SCFClient(host="192.168.8.101",
                        userid="52851dbd7918bbae",
                        passwd="a17faccd02661e4c") as scf:
             print(scf.get_zoom())          # {'current': 1.9, 'max': 10.0}

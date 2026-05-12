@@ -29,6 +29,10 @@ optical_zoom/
 ├── examples/                    ← 사용 예시
 │   ├── runtime_usage.py         ← 카메라 변경 없이 줌/스냅샷/비디오
 │   └── admin_bootstrap.py       ← dry_run/apply 인코딩 프로필 적용
+├── scripts/                     ← 셋업·운영 CLI
+│   ├── initial_setup.py         ← 새 카메라 초기 셋업 (도달성 + 프로필 + OSD)
+│   ├── healthcheck.py           ← 한 줄 헬스체크
+│   └── README.md
 ├── pyproject.toml               ← pip install -e . 지원
 ├── tools/                       ← 검증·실험용 CLI (라이브러리와 별개)
 │   ├── zoom_client.py           ← Python HAPI 클라이언트 (라이브러리 + CLI)

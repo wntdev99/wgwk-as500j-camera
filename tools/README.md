@@ -61,7 +61,7 @@ python3 tools/zoom_client.py --host 10.0.0.50 --user operator --password mypw in
 ```python
 from tools.zoom_client import CameraClient
 
-with CameraClient("192.168.8.213") as cam:
+with CameraClient("192.168.8.101") as cam:
     info = cam.device_info()
     print(info["device_type"])  # 'MC800S5'
 
@@ -70,7 +70,7 @@ with CameraClient("192.168.8.213") as cam:
 
     # RTSP URL 확보
     urls = cam.rtsp_urls()
-    print(urls["ch0_main"])      # 'rtsp://192.168.8.213:554/stream0'
+    print(urls["ch0_main"])      # 'rtsp://192.168.8.101:554/stream0'
 ```
 
 `with` 블록을 나가면 자동으로 logout + keep_alive 스레드 종료.
@@ -94,7 +94,7 @@ python3 tools/zoom_client.py rtsp        # ffplay 명령 자동 출력 → 복�
 
 ```bash
 ffplay -fflags nobuffer -flags low_delay -rtsp_transport tcp \
-  "rtsp://admin:123456@192.168.8.213:554/stream0"
+  "rtsp://admin:123456@192.168.8.101:554/stream0"
 ```
 
 그 다음 다른 터미널에서 `zoom-demo` 실행하면 화각 변화를 실시간 관찰 가능.
@@ -115,7 +115,7 @@ ffplay -fflags nobuffer -flags low_delay -rtsp_transport tcp \
 
 SCF 인증은 HAPI와 별개로 16-hex DES 토큰을 사용합니다. 자동 발급은 미구현이므로 한 번만 수동 추출이 필요합니다.
 
-1. 크롬으로 `http://192.168.8.213/` 로그인
+1. 크롬으로 `http://192.168.8.101/` 로그인
 2. **F12 → Network** 탭, **Preserve log** 체크
 3. 설정 페이지 진입 또는 PTZ 버튼 한 번 클릭
 4. `setPTZCmd`, `getPtzConfig` 같은 POST 요청 선택 → **Payload** 또는 **Request** 탭
@@ -174,7 +174,7 @@ python3 tools/scf_client.py dump-media
 from tools.scf_client import SCFClient, goto_zoom
 
 # 토큰은 SCF_USERID / SCF_PASSWD 환경변수에서 자동 로드
-with SCFClient(host="192.168.8.213") as scf:
+with SCFClient(host="192.168.8.101") as scf:
     # 줌 배율 실시간 read
     zoom = scf.get_zoom()
     print(zoom)  # {'current': 1.9, 'max': 10.0}

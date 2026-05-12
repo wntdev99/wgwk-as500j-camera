@@ -3,7 +3,7 @@
 빠른 시작:
     from wgwk_camera import Camera
 
-    with Camera("192.168.8.213") as cam:
+    with Camera("192.168.8.101") as cam:
         cam.zoom_in(500)
         cam.snapshot("frame.jpg")
         with cam.video_main().opencv() as cap:
@@ -25,7 +25,7 @@ from __future__ import annotations
 from .control import ControlClient
 from .encoding import EncodingProfile, StreamSpec, merge_into_current
 from .exceptions import AuthError, CameraError, EncodingError, StreamError
-from .facade import AdminFacade, Camera
+from .facade import AdminFacade, Camera, check_reachable
 from .image import CAPTURE_FIELDS, ImageClient
 from .profiles import (
     ALL_PROFILES,
@@ -43,6 +43,8 @@ __all__ = [
     "Camera",
     # 컴포넌트
     "ControlClient", "ImageClient", "VideoStream", "AdminFacade",
+    # 헬퍼
+    "check_reachable",
     # 인코딩 / 프로필
     "EncodingProfile", "StreamSpec", "merge_into_current",
     "PRECISION_PROFILE", "ROBOT_VISION_PROFILE",

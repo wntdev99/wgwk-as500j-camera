@@ -28,7 +28,7 @@ import requests
 
 
 # 본 펌웨어(MC800S5 V3.4.5.2) 실측 정보 — 검증된 기본값
-DEFAULT_HOST = "192.168.8.213"
+DEFAULT_HOST = "192.168.8.101"
 DEFAULT_PORT = 80
 DEFAULT_USER = "admin"
 DEFAULT_PASS = "123456"
@@ -45,7 +45,7 @@ class CameraClient:
     """HAPI 기반 카메라 제어 클라이언트.
 
     Usage:
-        with CameraClient("192.168.8.213") as cam:
+        with CameraClient("192.168.8.101") as cam:
             cam.zoom("in", autostop_ms=500)
             print(cam.rtsp_urls())
     """
@@ -208,7 +208,7 @@ def rtsp_url_with_auth(client: CameraClient, key: str = "ch0_main") -> str:
     필요할 수 있으므로 'rtsp://user:pw@host:port/path' 형태로 변환.
     """
     urls = client.rtsp_urls()
-    raw = urls[key]  # 예: 'rtsp://192.168.8.213:554/stream0'
+    raw = urls[key]  # 예: 'rtsp://192.168.8.101:554/stream0'
     if "@" in raw:
         return raw
     scheme, rest = raw.split("://", 1)

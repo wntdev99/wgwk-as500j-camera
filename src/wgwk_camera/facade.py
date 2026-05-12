@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 from .control import ControlClient
@@ -12,6 +13,22 @@ from .encoding import EncodingProfile, merge_into_current
 from .exceptions import CameraError
 from .image import ImageClient
 from .video import VideoStream
+
+
+def check_reachable(host: str, port: int = 80, timeout: float = 2.0) -> None:
+    """카메라 TCP 포트가 열려 있는지 빠르게 확인.
+
+    Raises:
+        CameraError: 시간 내에 연결되지 않으면.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+    except (socket.timeout, OSError) as e:
+        raise CameraError(
+            f"카메라 {host}:{port}에 도달할 수 없습니다 ({e}). "
+            "전원·네트워크 케이블·IP 설정을 확인하세요."
+        ) from e
 
 
 class Camera:
@@ -45,7 +62,7 @@ class Camera:
 
     def __init__(
         self,
-        host: str = "192.168.8.213",
+        host: str = "192.168.8.101",
         username: str = "admin",
         password: str = "123456",
         *,
@@ -53,7 +70,18 @@ class Camera:
         scf_userid: str | None = None,
         scf_passwd: str | None = None,
         auto_login: bool = True,
+        preflight: bool = True,
+        preflight_timeout: float = 2.0,
     ) -> None:
+        """
+        Args:
+            preflight: True(기본)면 생성 시 TCP 도달성 확인. 카메라가 응답
+                안 하면 즉시 CameraError. False면 첫 메서드 호출까지 지연.
+            preflight_timeout: 도달성 확인 timeout (초).
+            auto_login: True(기본)면 preflight 통과 후 HAPI 로그인 + keep_alive.
+        """
+        if preflight:
+            check_reachable(host, port, timeout=preflight_timeout)
         self._control = ControlClient(host=host, username=username,
                                       password=password, port=port)
         self._image = ImageClient(host=host, port=port,
@@ -62,8 +90,17 @@ class Camera:
         self._host = host
         self._user = username
         self._password = password
+        self._port = port
         if auto_login:
             self._control.login()
+
+    def is_reachable(self, *, timeout: float = 2.0) -> bool:
+        """런타임에 카메라 도달성을 다시 확인. 예외 없이 bool 반환."""
+        try:
+            check_reachable(self._host, self._port, timeout=timeout)
+            return True
+        except CameraError:
+            return False
 
     def close(self) -> None:
         self._control.logout()

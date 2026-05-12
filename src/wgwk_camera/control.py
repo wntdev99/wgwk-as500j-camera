@@ -38,7 +38,7 @@ class ControlClient:
     호출만 노출한다.
     """
 
-    host: str = "192.168.8.213"
+    host: str = "192.168.8.101"
     username: str = "admin"
     password: str = "123456"
     port: int = 80

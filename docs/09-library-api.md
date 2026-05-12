@@ -34,7 +34,7 @@ pip install -e "/path/to/wgwk-as500j-camera[video]"
 ```python
 from wgwk_camera import Camera
 
-with Camera("192.168.8.213") as cam:
+with Camera("192.168.8.101") as cam:
     # 런타임 제어
     cam.zoom_in(500)
     cam.zoom_out(500)
@@ -74,12 +74,20 @@ wgwk_camera
 ### 생성자
 
 ```python
-Camera(host="192.168.8.213",
+Camera(host="192.168.8.101",
        username="admin", password="123456",
        *, port=80,
        scf_userid=None, scf_passwd=None,   # 없으면 env SCF_USERID/SCF_PASSWD
-       auto_login=True)
+       auto_login=True,
+       preflight=True,            # 생성 시 TCP 도달성 확인
+       preflight_timeout=2.0)
 ```
+
+**preflight 동작**:
+- `preflight=True` (기본) — 생성 즉시 `socket.create_connection(host, port, timeout)`으로 도달성 확인. 실패 시 `CameraError` raise (전원·네트워크 즉시 진단)
+- `preflight=False` — 도달성 확인 생략. 첫 메서드 호출 시점에 오류 발생 (lazy)
+- `cam.is_reachable(timeout=2.0)` — 런타임에 다시 확인 (예외 없이 bool)
+- `check_reachable(host, port, timeout)` — Camera 인스턴스 없이 단독 호출 가능 (`from wgwk_camera import check_reachable`)
 
 ### 런타임 — 줌 / 포커스 / 회전 / 프리셋
 
@@ -225,7 +233,7 @@ from wgwk_camera import Camera
 class CameraNode(Node):
     def __init__(self):
         super().__init__("wgwk_camera")
-        self.declare_parameter("host", "192.168.8.213")
+        self.declare_parameter("host", "192.168.8.101")
         self.cam = Camera(self.get_parameter("host").value)
         self.bridge = CvBridge()
         self.pub_main = self.create_publisher(Image, "~/image_raw", 10)
@@ -251,7 +259,7 @@ def main():
 from wgwk_camera import Camera, CameraError, AuthError, StreamError
 
 try:
-    with Camera("192.168.8.213") as cam:
+    with Camera("192.168.8.101") as cam:
         cam.zoom_in(500)
 except AuthError as e:
     print(f"인증 실패: {e}")
