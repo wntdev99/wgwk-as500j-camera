@@ -10,7 +10,12 @@ import warnings
 from typing import Any
 
 from .control import ControlClient
-from .encoding import EncodingProfile, gop_will_clamp, merge_into_current
+from .encoding import (
+    EncodingProfile,
+    gop_will_clamp,
+    merge_into_current,
+    validate_against_capability,
+)
 from .exceptions import CameraError, EncodingError
 from .image import ImageClient
 from .video import VideoStream
@@ -225,6 +230,14 @@ class Camera:
         """현재 인코딩 설정 read. **변경하지 않음**."""
         return self._control.video_config()
 
+    def video_capabilities(self) -> list[dict]:
+        """카메라가 지원하는 codec/해상도/비트레이트/프레임레이트 범위."""
+        return self._control.video_capability()
+
+    def audio_capabilities(self) -> list[dict]:
+        """카메라가 지원하는 오디오 코덱 목록."""
+        return self._control.audio_capability()
+
     def get_osd_enabled(self) -> bool:
         return bool(self._control.osd_get().get("enable", 0))
 
@@ -255,13 +268,15 @@ class AdminFacade:
 
     def apply_encoding_profile(self, profile: EncodingProfile,
                                *, dry_run: bool = True,
-                               strict_gop: bool = False) -> dict[int, dict]:
+                               strict_gop: bool = False,
+                               validate: bool = True) -> dict[int, dict]:
         """인코딩 프로필을 카메라에 적용.
 
-        1. 현재 video_config(HAPI) GET — 표시·진단 용도
-        2. profile과 merge — bitRateControl, qp_enable 등 부수 필드는 보존
-        3. GOP 클램프 가드 — fps의 정수배가 아니면 경고(또는 strict_gop=True면 raise)
-        4. dry_run=False면 SCF /setMediaVideoEncodeConfig로 PUT
+        1. (validate=True) `/system/video/capability`로 사전 검증
+        2. 현재 video_config(HAPI) GET — 표시·진단 용도
+        3. profile과 merge — bitRateControl, qp_enable 등 부수 필드는 보존
+        4. GOP 클램프 가드 — fps의 정수배가 아니면 경고(또는 strict_gop=True면 raise)
+        5. dry_run=False면 SCF /setMediaVideoEncodeConfig로 PUT
 
         주의: 본 카메라(MC800S5 V3.4.5.2)의 HAPI `/system/video/set`은 응답
         없이 끊기고 변경도 적용되지 않는다. 따라서 인코딩 변경은 SCF로 라우팅하며,
@@ -272,15 +287,26 @@ class AdminFacade:
             dry_run: True(기본)면 변경 사항만 보여주고 실제 적용 안 함.
             strict_gop: True면 gop이 fps의 정수배가 아닐 때 EncodingError raise.
                 False(기본)면 warnings.warn 후 진행 — 펌웨어가 클램프함.
+            validate: True(기본)면 적용 전 카메라 capability로 codec/해상도/fps/
+                bitrate 범위를 검증. 호환되지 않으면 EncodingError raise.
 
         Returns:
             {stream_id: {field: (old, new)}} 차이 dict.
             빈 dict면 이미 프로필 상태와 동일.
 
         Raises:
-            EncodingError: strict_gop=True인데 gop·fps 정수배 위반.
+            EncodingError: 검증 실패(validate=True) 또는 strict_gop=True 위반.
             AuthError: dry_run=False인데 SCF 토큰이 미설정.
         """
+        if validate:
+            capability = self._cam.control.video_capability()
+            errors = validate_against_capability(profile, capability)
+            if errors:
+                raise EncodingError(
+                    "profile incompatible with camera capability:\n  - "
+                    + "\n  - ".join(errors)
+                )
+
         current = self._cam.control.video_config()
         merged, diff = merge_into_current(current, profile)
 

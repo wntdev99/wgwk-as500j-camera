@@ -15,6 +15,7 @@ optical_zoom/
 │   ├── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
 │   ├── 06-live-probe-result.md  ← 실기 프로브 결과 (MC800S5, 펌웨어 V3.4.5.2)
 │   ├── 07-scf-api.md            ← 비공식 SOAP 채널(SCF) — 줌 배율 read / WDR·셔터 등
+│   ├── 08-endpoint-probe-2026-05-12.md  ← SDK 매핑 endpoint 실측 probe 결과
 │   └── 09-library-api.md        ← wgwk_camera 라이브러리 공개 API 가이드
 ├── src/wgwk_camera/             ← 외부 임포트용 라이브러리 패키지
 │   ├── __init__.py              ← 공개 API

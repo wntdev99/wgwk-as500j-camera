@@ -23,7 +23,13 @@
 from __future__ import annotations
 
 from .control import ControlClient
-from .encoding import EncodingProfile, StreamSpec, gop_will_clamp, merge_into_current
+from .encoding import (
+    EncodingProfile,
+    StreamSpec,
+    gop_will_clamp,
+    merge_into_current,
+    validate_against_capability,
+)
 from .exceptions import AuthError, CameraError, EncodingError, StreamError
 from .facade import AdminFacade, Camera, check_reachable
 from .image import CAPTURE_FIELDS, ImageClient
@@ -47,6 +53,7 @@ __all__ = [
     "check_reachable",
     # 인코딩 / 프로필
     "EncodingProfile", "StreamSpec", "merge_into_current", "gop_will_clamp",
+    "validate_against_capability",
     "PRECISION_PROFILE", "ROBOT_VISION_PROFILE",
     "BANDWIDTH_SAVE_PROFILE", "FAST_TRACKING_PROFILE", "ALL_PROFILES",
     # Capture 필드 카탈로그

@@ -153,15 +153,33 @@ vs.ffmpeg_grab_frame("/tmp/frame.jpg")
 | `cam.function_list() -> list[str]` | 지원 HAPI 엔드포인트 |
 | `cam.rtsp_urls() -> dict` | `{'ch0_main': '...', 'ch0_sub': '...'}` |
 | `cam.get_video_config() -> list[dict]` | 현재 인코딩 (각 stream) |
+| `cam.video_capabilities() -> list[dict]` | 지원 codec×해상도×fps×bitrate (`/system/video/capability`) |
+| `cam.audio_capabilities() -> list[dict]` | 지원 오디오 코덱 (`/system/audio/capability`) |
 | `cam.get_osd_enabled() -> bool` | OSD 전체 토글 상태 |
 | `cam.get_zoom_setpoint() -> dict` | SCF DzoomConfig {setpoint, max} |
 | `cam.get_af() -> dict` | AF enable/type/coordinate |
+
+#### `video_capabilities()` 응답 예시
+
+```python
+caps = cam.video_capabilities()  # 45 entries on MC800S5 V3.4.5.2
+caps[0]
+# {'codec_name': 'H264', 'res_name': '3840X2160', 'stream_type': 0,
+#  'def_bitrate': 7000, 'min_bitrate': 512, 'max_bitrate': 12288,
+#  'def_framerate': 20, 'min_framerate': 5, 'max_framerate': 20,
+#  'def_config': 0}
+```
+
+stream_type: `0=main`, `1=sub`, `2=third`. 본 펌웨어(V3.4.5.2) capability 요약:
+- main: H264/H265/H265+, up to 3840×2160 / 60 fps / 12 288 kbps
+- **sub: D1급 이하만** (720X480, VGA, 640X360, 480X360, CIF), up to 30 fps / 2048 kbps
+- third: 1080P/720P/CIF, up to 10 fps
 
 ### `cam.admin` — 카메라 설정 변경 (명시적 호출만)
 
 | 메서드 | 설명 |
 |---|---|
-| `cam.admin.apply_encoding_profile(profile, dry_run=True, strict_gop=False)` | 인코딩 변경. dry_run=True면 diff만 반환. SCF 채널 사용(토큰 필요). |
+| `cam.admin.apply_encoding_profile(profile, dry_run=True, strict_gop=False, validate=True)` | 인코딩 변경. dry_run=True면 diff만 반환. validate=True면 capability 사전 검증. SCF 채널 사용(토큰 필요). |
 | `cam.admin.apply_osd(enabled, dry_run=True)` | OSD 토글 |
 | `cam.admin.reboot(confirm=True)` | 재부팅 (confirm 필요). 30~60s 다운타임 |
 
@@ -171,6 +189,15 @@ vs.ffmpeg_grab_frame("/tmp/frame.jpg")
 않는다(실증). 따라서 라이브러리는 **SCF `/setMediaVideoEncodeConfig` 채널로
 라우팅**한다. 결과:
 
+- **Capability 사전 검증** — `validate=True`(기본)면 `/system/video/capability`로
+  각 스트림의 (codec, resolution, fps, bitrate) 호환성을 사전 검사. 위반 시
+  `EncodingError`를 raise하여 카메라에 잘못된 값을 보내지 않는다. 검증 우회는
+  `validate=False`. 헬퍼:
+  ```python
+  from wgwk_camera import validate_against_capability
+  errors = validate_against_capability(profile, cam.video_capabilities())
+  # errors: list[str], 비어 있으면 통과
+  ```
 - **SCF 토큰 필요** — `Camera(scf_userid=..., scf_passwd=...)` 또는 환경변수
   `SCF_USERID` / `SCF_PASSWD`. 미설정 시 `AuthError`.
 - **GOP는 fps의 정수배로 클램프됨** — 펌웨어 동작. 정수배 위반 시 기본은

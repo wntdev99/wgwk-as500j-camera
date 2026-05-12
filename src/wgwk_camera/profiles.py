@@ -2,6 +2,13 @@
 
 이 상수들은 admin 호출 시 인자로 전달해야 카메라에 적용된다.
 라이브러리는 자동으로 카메라 설정을 변경하지 않는다.
+
+펌웨어 V3.4.5.2(MC800S5) capability 제약:
+  - main(stream_type=0): up to 3840x2160 / 60 fps / 12 288 kbps
+  - sub(stream_type=1): up to **720X480 (D1)** / 30 fps / 2048 kbps
+    → sub에는 720P/1080P를 지정할 수 없음
+  - third(stream_type=2): up to 1080P / 10 fps
+모든 프로필은 `validate_against_capability()`를 통과한다.
 """
 from __future__ import annotations
 
@@ -14,9 +21,9 @@ from .encoding import EncodingProfile, StreamSpec
 PRECISION_PROFILE = EncodingProfile(
     name="precision",
     description="정밀 검출 + 서브 활용 + OSD off",
-    main =StreamSpec(True,  "H264", "1080P", 60, 3000, 60),
-    sub  =StreamSpec(True,  "H264", "720P",  20,  800, 20),
-    third=StreamSpec(False, "H264", "720P",  10,  300, 10),
+    main =StreamSpec(True,  "H264", "1080P",   60, 3000, 60),
+    sub  =StreamSpec(True,  "H264", "720X480", 20,  800, 20),
+    third=StreamSpec(False, "H264", "720P",    10,  300, 10),
     osd_enabled=False,
 )
 
@@ -50,9 +57,9 @@ BANDWIDTH_SAVE_PROFILE = EncodingProfile(
 FAST_TRACKING_PROFILE = EncodingProfile(
     name="fast_tracking",
     description="고프레임율로 빠른 움직임 캡처",
-    main =StreamSpec(True,  "H264", "1080P", 60, 4500, 30),
-    sub  =StreamSpec(True,  "H264", "720P",  30,  800, 30),
-    third=StreamSpec(False, "H264", "720P",  10,  300, 10),
+    main =StreamSpec(True,  "H264", "1080P",   60, 4500, 30),
+    sub  =StreamSpec(True,  "H264", "720X480", 30,  800, 30),
+    third=StreamSpec(False, "H264", "720P",    10,  300, 10),
     osd_enabled=False,
 )
 

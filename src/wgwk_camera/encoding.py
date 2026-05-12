@@ -91,6 +91,64 @@ def gop_will_clamp(gop: int, fps: int) -> int | None:
     return round(gop / fps) * fps
 
 
+def validate_against_capability(
+    profile: EncodingProfile,
+    capability: list[dict],
+) -> list[str]:
+    """프로필이 카메라 capability와 호환되는지 검사.
+
+    HAPI `/system/video/capability` 응답과 비교해서 다음을 검증:
+      - 각 스트림의 (codec, resolution) 조합이 capability에 존재
+      - fps가 [min_framerate, max_framerate] 범위 내
+      - bitrate가 [min_bitrate, max_bitrate] 범위 내
+
+    Args:
+        profile: 검사 대상 프로필.
+        capability: `ControlClient.video_capability()` 응답.
+
+    Returns:
+        오류 메시지 리스트. 비어 있으면 통과. 비활성 스트림(enable=False)은 검사 생략.
+    """
+    errors: list[str] = []
+    stream_label = {0: "main", 1: "sub", 2: "third"}
+    for stream_type, spec in enumerate(
+        [profile.main, profile.sub, profile.third]
+    ):
+        if not spec.enable:
+            continue
+        label = stream_label.get(stream_type, f"stream{stream_type}")
+        matches = [
+            c for c in capability
+            if c.get("stream_type") == stream_type
+            and c.get("codec_name") == spec.codec
+            and c.get("res_name") == spec.resolution
+        ]
+        if not matches:
+            available = sorted({
+                f'{c.get("codec_name")}/{c.get("res_name")}'
+                for c in capability if c.get("stream_type") == stream_type
+            })
+            errors.append(
+                f"{label}: codec={spec.codec} resolution={spec.resolution} "
+                f"not in capability. available: {', '.join(available) or '<none>'}"
+            )
+            continue
+        entry = matches[0]
+        fmin, fmax = entry.get("min_framerate", 0), entry.get("max_framerate", 0)
+        if not (fmin <= spec.fps <= fmax):
+            errors.append(
+                f"{label}: fps={spec.fps} out of [{fmin}, {fmax}] for "
+                f"{spec.codec}/{spec.resolution}"
+            )
+        bmin, bmax = entry.get("min_bitrate", 0), entry.get("max_bitrate", 0)
+        if not (bmin <= spec.bitrate_kbps <= bmax):
+            errors.append(
+                f"{label}: bitrate={spec.bitrate_kbps}kbps out of [{bmin}, {bmax}] "
+                f"for {spec.codec}/{spec.resolution}"
+            )
+    return errors
+
+
 def merge_into_current(current: list[dict], profile: EncodingProfile) -> tuple[list[dict], dict]:
     """현재 video config와 profile을 병합.
 

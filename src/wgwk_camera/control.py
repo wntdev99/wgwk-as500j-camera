@@ -156,6 +156,26 @@ class ControlClient:
     def video_config(self) -> list[dict]:
         return self._get("/system/video/get")
 
+    def video_capability(self) -> list[dict]:
+        """스트림별 지원 codec/해상도/비트레이트/프레임레이트 범위.
+
+        펌웨어 V3.4.5.2 응답 필드:
+            codec_name, res_name, stream_type (0=main, 1=sub, 2=third),
+            def_bitrate, min_bitrate, max_bitrate,
+            def_framerate, min_framerate, max_framerate, def_config.
+
+        SDK `RESOLUTION_ENTRY` 구조체와 1:1 매핑.
+        """
+        return self._get("/system/video/capability")
+
+    def audio_capability(self) -> list[dict]:
+        """지원 오디오 코덱 목록.
+
+        펌웨어 응답 필드: codec_name, channels, bitspersample,
+        samplerate, bitrate, def_config. SDK `AUDIO_CODEC_ENTRY`와 매핑.
+        """
+        return self._get("/system/audio/capability")
+
     def osd_get(self) -> dict:
         return self._get("/system/osd/get")
 
