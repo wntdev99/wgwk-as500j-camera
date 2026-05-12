@@ -101,9 +101,11 @@ Camera(host="192.168.8.101",
 | `cam.focus_restore()` | AF 기본 위치 복귀 |
 | `cam.move(dir, speed=5, ms=500)` | 회전 (`left`/`right`/`up`/`down`/대각선 8방향) |
 | `cam.stop()` | 모든 PTZ 정지 |
-| `cam.preset_save(n)` | 현재 위치를 프리셋 n에 저장 |
-| `cam.preset_call(n)` | 프리셋 n으로 이동 |
+| `cam.preset_save(n)` | 현재 위치를 프리셋 n에 저장 ⚠ |
+| `cam.preset_call(n)` | 프리셋 n으로 이동 ⚠ |
 | `cam.preset_delete(n)` | 프리셋 n 삭제 |
+
+> ⚠ **preset 줌 위치 복귀 신뢰성 한계**: 본 카메라(MC800S5 V3.4.5.2)는 모터 absolute encoder를 노출하지 않아 preset의 줌 위치 복귀가 비결정적이다. 실측 시 4단계 zoom-in 위치 저장 후 wide-end에서 호출했을 때 1/4건만 정확 복귀, 나머지는 어긋났고 한 건은 최대 zoom-in을 저장했음에도 호출 시 최대 wide-out으로 갔다. save/list/delete API 자체는 정상 동작. 자세한 검증은 `docs/08-endpoint-probe-2026-05-12.md §8.D`. 시스템 예약 preset(79/82/84/92/93/94/98/99)은 회피.
 
 ### 런타임 — 스냅샷 / 이미지 설정
 

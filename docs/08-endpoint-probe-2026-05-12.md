@@ -361,6 +361,67 @@ LOGIN 응답 수신 직후 30초간 listen하며 `zoom_in/out 800ms` × 2, `set_
 
 그 외엔 본 라이브러리의 HAPI + SCF 추상화로 운영 충분.
 
+## 8.D PTZ Preset — save/call/delete API 라이브 검증
+
+### 목적
+
+`Camera.preset_save() / preset_call() / preset_delete()` 가 본 카메라(MC800S5 V3.4.5.2)에서 신뢰할 수 있는 줌 위치 복귀 메커니즘인지 검증. 모터 absolute encoder 부재(§8.5 결론)가 preset 정확도에 영향을 주는지 확인.
+
+### 절차 (4단계 검증)
+
+1. **wide-end 기준 확보** — `zoom_out 10s` 발사 후 모터 settle, 캡처 (`0_wide_reference.jpg`).
+2. **4개 위치 저장** — 1.5s `zoom_in` 후 `preset_save(N)` × 4회 (N=1,2,3,4), 매번 프레임 캡처.
+3. **wide-end 재복귀** — `zoom_out 10s`.
+4. **각 preset 호출 + 캡처** — wide에서 출발해 `preset_call(N)` 발사, 6s settle 후 캡처.
+5. **삭제** — `preset_delete(N)` × 4회, 목록 복원 확인.
+
+### 결과
+
+**API 동작 — 정상 (3/3)**:
+- `preset_save(N)` → preset 목록에 추가됨
+- `get_preset_list()` → `[]` → `[1]` → `[1,2]` → `[1,2,3]` → `[1,2,3,4]`
+- `preset_delete(N)` → 정확히 제거
+
+**위치 복귀 — 비결정적 (1/4 정확)**:
+
+| preset | 저장 시점 시야 | 호출 후 시야 | 평가 |
+|---|---|---|---|
+| #1 (1.5s zoom_in) | 적당히 zoom-in (ROBOTIS+GR-240 보임) | save_p1과 거의 동일 | **정확** ✓ |
+| #2 (3.0s zoom_in) | 더 zoom-in (G3 라벨 크게) | recall_p1과 비슷, save_p2 줌 레벨 아님 | **부정확** ✗ |
+| #3 (4.5s zoom_in) | 매우 zoom-in | save_p3과 다른 줌 레벨 | **부정확** ✗ |
+| #4 (6.0s zoom_in, 최대) | 최대 zoom-in ("G3" 글자만 보임) | **wide_reference보다 더 광각** (ORBBEC 박스 + cable bundle 보임) | **완전 반대 방향** ✗ |
+
+Laplacian variance (참고 — 절대 비교 부적합하나 trend 확인용):
+```
+preset #1: save_var=236  recall_var=221   Δ=-16
+preset #2: save_var=208  recall_var=291   Δ=+83
+preset #3: save_var=217  recall_var=2748  Δ=+2531   ← 차이 큼 (다른 시야)
+preset #4: save_var=208  recall_var=1220  Δ=+1012   ← 차이 큼 (다른 시야)
+```
+
+캡처 파일: `/tmp/preset_4stage_2026_05_12/` (저장 vs 호출 시각 비교 자료).
+
+### 원인 추정
+
+본 카메라가 모터 absolute encoder를 어느 채널로도 노출하지 않는다는 사실(§8.5)과 일관:
+- 펌웨어는 모터 절대 위치를 알 수 없고, preset도 정확한 좌표를 저장 못 함
+- 가능 메커니즘:
+  - PWM 펄스 카운트 / 시간 누적 기반 추정 (drift 누적)
+  - 호출 시 hard limit에 부딪힌 상태면 추정 기준점 망가짐
+  - preset이 사실 pan/tilt 전용 — 본 카메라는 PT 없으니 zoom 부분 무의미
+- recall_p4 가 최대 zoom-in 저장 → 최대 wide-out으로 가는 현상은 가설 #2 또는 #3 시사
+
+### 라이브러리 영향
+
+- API 표면(`preset_save/call/delete`)은 HAPI `/ptz_ctrl/preset`을 정확히 노출하고 동작도 정상. **라이브러리 결함 아님**.
+- 운영 한계는 펌웨어 측에 있음. `Camera.preset_call()` docstring + `docs/09-library-api.md §5 (런타임 / preset)` 에 경고 명시.
+
+### 재현 명령
+```bash
+SCF_USERID=... SCF_PASSWD=... python3 ./scripts/preset_4stage_test.py
+# (script: tmp 디렉토리에 단일 파일로 작성 후 실행, 이 문서 §8.D 절차)
+```
+
 ## 8.6 재현 명령
 
 ```bash

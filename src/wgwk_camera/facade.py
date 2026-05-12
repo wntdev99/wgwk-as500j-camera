@@ -166,12 +166,33 @@ class Camera:
         self._control.stop()
 
     def preset_save(self, no: int) -> None:
+        """현재 위치를 preset 번호 `no`로 저장.
+
+        시스템 예약 preset (79/82/84/92/93/94/98/99 — `ref/NETSDK.../conf.ipc.xml`
+        `AdvanceConfig`)은 피해서 사용자 번호는 1~78 또는 100+ 권장.
+
+        주의 — 줌 위치 복귀 신뢰성: 본 카메라(MC800S5 V3.4.5.2)는 모터
+        absolute encoder를 노출하지 않아, preset_save()가 저장한 줌 위치를
+        preset_call()이 정확히 복귀하지 못한다. 실측 시 wide-end 도달 후 호출 시
+        의도와 정반대 방향으로 가는 경우도 관찰됨. 자세한 결과는
+        `docs/08-endpoint-probe-2026-05-12.md §8.D` 참조.
+        """
         self._control.preset("set", no)
 
     def preset_call(self, no: int) -> None:
+        """저장된 preset `no` 위치로 이동.
+
+        ⚠ **줌 위치 복귀는 신뢰할 수 없다** (펌웨어 한계). 실측 결과 4단계 zoom
+        position에 대해 1/4건만 정확히 복귀, 나머지는 비결정적이며 한 건은
+        최대 zoom-in을 저장했는데 최대 wide-out으로 갔다. 모터 absolute encoder
+        부재의 결과로 추정. 운영에서 zoom 위치 정확도가 필요하면 SW-side 추적을
+        병행하거나 preset 사용 자체를 피할 것. 자세한 검증은
+        `docs/08-endpoint-probe-2026-05-12.md §8.D`.
+        """
         self._control.preset("call", no)
 
     def preset_delete(self, no: int) -> None:
+        """preset `no` 삭제. save/list/delete API 자체는 정상 동작."""
         self._control.preset("delete", no)
 
     def snapshot(self, path: str | None = None) -> bytes:
