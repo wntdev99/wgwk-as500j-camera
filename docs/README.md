@@ -14,6 +14,9 @@ optical_zoom/
 │   ├── 04-zoom-control-guide.md ← 광학 줌 제어 통합 가이드
 │   ├── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
 │   └── 06-live-probe-result.md  ← 실기 프로브 결과 (MC800S5, 펌웨어 V3.4.5.2)
+├── tools/                       ← 검증 도구
+│   ├── zoom_client.py           ← Python HAPI 클라이언트 (라이브러리 + CLI)
+│   └── README.md                ← 사용법
 └── ref/                         ← 원본 벤더 자료
     ├── http_api.pdf             ← HAPI 사양서 PDF(VER 1.5, 2024-03-18)
     ├── http_api_text.txt        ← 위 PDF 텍스트 추출본(134 KB)
