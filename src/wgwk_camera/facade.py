@@ -333,6 +333,54 @@ class AdminFacade:
         self._cam.image.set_video_encoding(merged)
         return diff
 
+    # ─── AF (Auto Focus) ────────────────────────────────────
+
+    def set_af(
+        self,
+        *,
+        enable: bool | None = None,
+        af_type: int | None = None,
+        send_on_start: bool | None = None,
+        send_coordinate: bool | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """AF 설정 변경. SCF `/setPtzAfConfig` 사용.
+
+        지정하지 않은 필드는 현재 값을 유지한다. `dry_run=True`(기본)이면
+        예상 diff만 반환하고 카메라 설정은 변경하지 않는다.
+
+        주의: `enable=False`로 AF를 끄면 줌 동작 후 자동 포커싱이 되지 않아
+        영상이 흐려질 수 있다. 작업 완료 후 `enable=True`로 복원 권장.
+
+        Args:
+            enable: AF on(True)/off(False)/유지(None).
+            af_type: AF 알고리즘 타입(펌웨어 의존, 보통 0).
+            send_on_start: 카메라 부팅 시 AF 명령 자동 발사.
+            send_coordinate: 좌표 정보 전송 여부.
+            dry_run: True면 변경 사항만 표시.
+
+        Returns:
+            dry_run=True: {"changed": bool, "before": dict, "would": dict}.
+            dry_run=False: {"changed": bool, "before": dict, "after": dict}.
+        """
+        before = self._cam.image.get_af()
+        proposed = {
+            "enable":         (1 if enable        is True else 0 if enable        is False else before["enable"]),
+            "type":           (af_type            if af_type is not None         else before["type"]),
+            "send_on_start":  (1 if send_on_start is True else 0 if send_on_start is False else before["send_on_start"]),
+            "send_coordinate":(1 if send_coordinate is True else 0 if send_coordinate is False else before["send_coordinate"]),
+        }
+        changed = proposed != before
+        if dry_run or not changed:
+            return {"changed": changed, "before": before, "would": proposed}
+        after = self._cam.image.set_af(
+            enable=enable,
+            af_type=af_type,
+            send_on_start=send_on_start,
+            send_coordinate=send_coordinate,
+        )
+        return {"changed": True, "before": before, "after": after}
+
     # ─── OSD ────────────────────────────────────────────────
 
     def apply_osd(self, enabled: bool, *, dry_run: bool = True) -> dict:

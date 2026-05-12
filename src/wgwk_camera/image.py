@@ -148,6 +148,47 @@ class ImageClient:
             "send_coordinate": int(attrs.get("bSendCoordinate", "0")),
         }
 
+    def set_af(
+        self,
+        *,
+        enable: bool | None = None,
+        af_type: int | None = None,
+        send_on_start: bool | None = None,
+        send_coordinate: bool | None = None,
+    ) -> dict[str, int]:
+        """AF 설정 부분 업데이트.
+
+        지정하지 않은 필드는 현재 값을 유지. SCF `/setPtzAfConfig` 사용 — 본문은
+        `<AfConfig enable=".." type=".." bSendOnStart=".." bSendCoordinate=".." />`.
+
+        Args:
+            enable: True/False면 AF on/off. None이면 현재 값 유지.
+            af_type: AF 알고리즘 타입 (펌웨어 의존, 보통 0).
+            send_on_start: 카메라 부팅 시 AF 명령 자동 발사.
+            send_coordinate: 좌표 정보 전송 여부.
+
+        Returns:
+            적용 후 GET back한 새로운 AF 상태.
+
+        Note:
+            `enable=False`로 끄면 광학 줌 후 자동 포커싱이 되지 않아 영상이
+            흐려질 수 있다. 필요할 때만 사용하고, 작업 후 enable=True로 복원 권장.
+        """
+        current = self.get_af()
+        new = {
+            "enable":          1 if enable          is True  else 0 if enable          is False else current["enable"],
+            "type":            af_type              if af_type is not None              else current["type"],
+            "bSendOnStart":    1 if send_on_start    is True  else 0 if send_on_start    is False else current["send_on_start"],
+            "bSendCoordinate": 1 if send_coordinate  is True  else 0 if send_coordinate  is False else current["send_coordinate"],
+        }
+        body = (
+            f'<AfConfig enable="{new["enable"]}" type="{new["type"]}" '
+            f'bSendOnStart="{new["bSendOnStart"]}" '
+            f'bSendCoordinate="{new["bSendCoordinate"]}" />'
+        )
+        self._post("/setPtzAfConfig", body)
+        return self.get_af()
+
     def get_preset_list(self) -> list[int]:
         xml = self._post("/getPresetList")
         return [int(n) for n in re.findall(r"<p>(\d+)</p>", xml)]

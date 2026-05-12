@@ -286,6 +286,40 @@ HAR에서 확인된 7개 호출.
 </soap:Body>
 ```
 
+### 4.4.5 `POST /setPtzAfConfig` — **AF (Auto Focus) 설정 변경**
+
+> 본 채널은 라이브 probe(2026-05-12)에서 식별. NETSDK `CMD_SET_SYSTEM_PTZ_AF`(SYSTEM_CONFIG_BASE+31)와 동등 기능.
+
+#### 페이로드 형식
+```xml
+<AfConfig enable="1" type="0" bSendOnStart="1" bSendCoordinate="1" />
+```
+
+| 속성 | 의미 | 값 |
+|---|---|---|
+| `enable` | AF 활성화 | `0`=off, `1`=on |
+| `type` | AF 알고리즘 타입 (`AfConfig.type` in SDK) | 펌웨어 의존, 보통 `0` |
+| `bSendOnStart` | 카메라 부팅 시 AF 명령 자동 발사 | `0`/`1` |
+| `bSendCoordinate` | AF 좌표 정보 전송 여부 | `0`/`1` |
+
+#### 호출 패턴
+1. `/getPtzConfig` 로 현재 `<AfConfig .../>` 4개 속성 read
+2. 변경할 속성만 덮어쓴 새 `<AfConfig .../>` 노드 생성
+3. `/setPtzAfConfig` 로 PUT — body는 `<AfConfig ... />` 노드 단독
+
+#### 검증 결과 (2026-05-12, 192.168.8.101)
+```
+BEFORE: enable=1 type=0 bSendOnStart=1 bSendCoordinate=1
+        ↓ /setPtzAfConfig with enable=0
+AFTER : enable=0 type=0 bSendOnStart=1 bSendCoordinate=1     ← 즉시 반영
+        ↓ /setPtzAfConfig with enable=1
+AFTER : enable=1 type=0 bSendOnStart=1 bSendCoordinate=1     ← 복원 성공
+```
+
+#### 사용 시 주의
+- **`enable=0`으로 AF를 끄면 줌 동작 후 자동 포커싱이 되지 않아 영상이 흐려진다**. 캡처/추적 작업 종료 후 `enable=1`로 복원 권장.
+- 다른 PTZ SET endpoint 후보(`/setPtzConfig`, `/setAfConfig`, `/setPTZConfig`)는 HTTP 202 응답만 주고 실제 변경은 적용되지 않음을 실측 확인. **`/setPtzAfConfig` 정확한 이름 필수**.
+
 ### 4.5 `POST /getPresetList` — 프리셋 목록
 
 ```xml

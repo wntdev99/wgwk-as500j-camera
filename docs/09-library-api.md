@@ -180,6 +180,7 @@ stream_type: `0=main`, `1=sub`, `2=third`. 본 펌웨어(V3.4.5.2) capability �
 | 메서드 | 설명 |
 |---|---|
 | `cam.admin.apply_encoding_profile(profile, dry_run=True, strict_gop=False, validate=True)` | 인코딩 변경. dry_run=True면 diff만 반환. validate=True면 capability 사전 검증. SCF 채널 사용(토큰 필요). |
+| `cam.admin.set_af(enable=None, af_type=None, send_on_start=None, send_coordinate=None, dry_run=True)` | AF 설정 변경. SCF `/setPtzAfConfig`. 지정한 필드만 변경, 나머지는 유지. `enable=False`로 끄면 줌 후 영상이 흐려질 수 있음 |
 | `cam.admin.apply_osd(enabled, dry_run=True)` | OSD 토글 |
 | `cam.admin.reboot(confirm=True)` | 재부팅 (confirm 필요). 30~60s 다운타임 |
 
