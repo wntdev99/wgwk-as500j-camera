@@ -1,6 +1,7 @@
 # 01. 카메라 하드웨어 사양
 
 > 출처: `ref/simple_spec.pdf` — 벤더 제공 영문 사양서(전각 문자 혼용 원본).
+> **실기 검증 결과는 본 문서 마지막 §"실기 확인 결과 (2026-05-12)" 절을 우선 참고.** 실측이 사양서와 다른 부분은 실측 값을 신뢰.
 
 ## 기본 정보
 
@@ -79,3 +80,38 @@
 | 호스트 플랫폼 | NETSDK가 aarch64용으로 제공되므로 ARM64 SBC(예: NVIDIA Jetson, Raspberry Pi 64-bit, RK3588 등)와 자연스러운 매칭 |
 | 실시간성 | RTSP 스트림 + HAPI 제어 분리 운용 권장. 줌 명령은 `autostop` 파라미터로 지속시간 제어 |
 | 줌 동작 검증 | 실기 도입 시 `/sysinfo/capability` 응답의 `ele_zoom`, `zoom_track`, `dzoomsetting`, `ptz_zoom` 같은 capability 문자열이 포함되는지 사전 확인 필요 |
+
+## 실기 확인 결과 (2026-05-12)
+
+본 절은 실제 수령된 모듈을 LAN에서 직접 점검한 결과로, 사양서와 다른 값을 우선합니다. 전체 데이터는 `docs/06-live-probe-result.md`를 참조.
+
+| 항목 | 사양서 기재 | **실측 값** |
+|---|---|---|
+| device_type (HAPI) | `MC800S` (사양서 §2.2.1 예시) | **`MC800S5`** — 8 MP 변형 |
+| 펌웨어 라벨 | — | `MC800S5_AF_V0-A-RTMP-H5 V3.4.5.2 build 2025-11-12 17:30:10` |
+| 디바이스 커널 | — | `Linux 5.10.61 armv7l` (32-bit ARM, **aarch64 NETSDK 직접 탑재 불가**) |
+| 출하 메인 스트림 | 사양서엔 다양한 옵션 기재 | **H.265 3840×2160 @ 20 fps VBR 6 000 kbps** (활성) |
+| 출하 서브 스트림 | — | **H.265 720×480 @ 20 fps VBR 500 kbps** (활성) |
+| 확장 스트림(stream3) | `three_video` 능력 명시 | H.265 720P @ 10 fps VBR 1 000 kbps (현재 비활성) |
+| 광학 줌(`ele_zoom`) 능력 | 사양서 명시 | **없음** — 본 펌웨어 capability에 부재 |
+| 변배 추적(`zoom_track`) | 사양서 명시 | **없음** |
+| PTZ 줌(`ptz_zoom`) | — | **있음** — `/ptz_ctrl/zoom`으로 제어 가능 |
+| AF(`af_setting`, `af_coordinate`) | 일부만 명시 | **둘 다 있음** |
+| 디지털 줌(`dzoomsetting`) | — | **있음** |
+| PTZ 방향 | — | `ptz_4_direction`만 존재(2/8방향 미지원) |
+| 한국어(`ko-ko`) | 사양서 미명시 | **있음** |
+| ONVIF Discovery (3702/UDP) | "ONVIF 지원" 명시 | **포트 closed** — 본 펌웨어에서 비활성. ONVIF 사용 불가 |
+| HTTPS (443/TCP) | `with_https` 능력 명시 | **포트 closed**, capability에도 없음 — 본 펌웨어는 HTTP만 |
+| RTMP push (1935/TCP) | `rtmp` 능력 명시 | 능력은 있으나 **포트는 closed** — push 대상이 별도 설정되어야 동작하는 듯 |
+| HTTP-alt (8000/TCP) | — | **open** (응답 없음) — RTMP/H5 라이브뷰 채널 가능성, 미확정 |
+
+### 줌 동작에 대한 실측 해석
+
+`ptz_zoom`은 존재하지만 `ele_zoom`(이중 렌즈 전동 줌)이 없으므로, 본 8 MP 모듈은 사양서가 가정한 "줌 렌즈 + 줌 제어 보드 + 줌 펌웨어 3종 결합"과는 다른 구현(단일 가변초점 렌즈 + 단일 모터 또는 디지털 줌 + AF) 가능성이 큽니다. **실제 화각 변화가 광학(렌즈 이동)인지 디지털(크롭)인지는 `/ptz_ctrl/zoom direction=in&autostop=1000` 호출 후 RTSP 영상으로 직접 관찰해야 확정**됩니다. 검증 절차는 `docs/05-bringup-test.md` §6.5 참고.
+
+### 활용 권장 사항 (실측 기반)
+
+1. **줌·PTZ 제어는 HAPI `/ptz_ctrl/*` 사용** — ONVIF가 비활성이므로 표준 ONVIF PTZ는 사용 불가
+2. **라이브 스트리밍은 RTSP 직접 사용** — `rtsp://192.168.8.213:554/stream0`(4K HEVC) 또는 `/stream1`(720×480). 디바이스가 알려준 URL을 그대로 사용
+3. **NETSDK는 통합 호스트(우분투) 측 클라이언트로만 가능** — 카메라 펌웨어(armv7l)에는 aarch64 SDK를 직접 올릴 수 없음
+4. **이벤트 push 사용 시 `/Event/subscription/regist`** — POST 방식, 클라이언트 측 TCP listener 필요

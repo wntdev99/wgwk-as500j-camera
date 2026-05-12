@@ -12,7 +12,8 @@ optical_zoom/
 │   ├── 02-http-api.md           ← HTTP API(HAPI) 정리
 │   ├── 03-netsdk.md             ← NETSDK(C/C++) 정리
 │   ├── 04-zoom-control-guide.md ← 광학 줌 제어 통합 가이드
-│   └── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
+│   ├── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
+│   └── 06-live-probe-result.md  ← 실기 프로브 결과 (MC800S5, 펌웨어 V3.4.5.2)
 └── ref/                         ← 원본 벤더 자료
     ├── http_api.pdf             ← HAPI 사양서 PDF(VER 1.5, 2024-03-18)
     ├── http_api_text.txt        ← 위 PDF 텍스트 추출본(134 KB)
@@ -29,13 +30,19 @@ optical_zoom/
 
 | 항목 | 값 |
 |---|---|
-| 카메라 모델 | `WGWK-AS500J` |
-| 메인 칩셋 | SigmaStar `SSC377D` |
-| 이미지 센서 | Sony `IMX335`, 5 MP, 1/2.8" CMOS |
-| 최대 해상도 | 3840×2160 @ 20 fps (메인) / D1·VGA·640×360 (서브) |
-| 코덱 | H.265+ / H.265 / H.264 |
-| 광학 줌 | **전동 줌(electric zoom) + 자동 초점(AF) 인터페이스 지원** — 별도의 zoom 렌즈·zoom 제어 보드·zoom 펌웨어 필요 |
-| 네트워크 | RJ45 10/100M, HTTP/RTSP/DHCP/NTP/ONVIF |
+| 카메라 모델 (외함) | `WGWK-AS500J` |
+| device_type (HAPI 응답, 실측) | **`MC800S5`** — 8 MP 변형 |
+| 펌웨어 (실측) | `MC800S5_AF_V0-A-RTMP-H5 V3.4.5.2 build 2025-11-12` |
+| 디바이스 커널 (실측) | Linux 5.10.61 **armv7l** (32-bit ARM) |
+| 메인 칩셋(사양서) | SigmaStar `SSC377D` |
+| 이미지 센서(사양서) | Sony `IMX335`, 5 MP, 1/2.8" CMOS — **8 MP 모듈은 다른 센서 추정** |
+| 출하 메인 스트림 (실측) | **H.265 3840×2160 @ 20 fps VBR 6 000 kbps** |
+| 출하 서브 스트림 (실측) | H.265 720×480 @ 20 fps VBR 500 kbps |
+| 코덱 | H.265+ / H.265 / H.264 (출하 기본 H.265) |
+| 줌 (실측 capability) | `ptz_zoom`, `dzoomsetting`, `af_setting`, `af_coordinate` ✓ / `ele_zoom`, `zoom_track` ✗ |
+| ONVIF Discovery (실측) | **비활성** (포트 3702 closed) |
+| HTTPS (실측) | **비활성** (포트 443 closed) |
+| 네트워크 | RJ45 10/100M, HTTP/RTSP/DHCP/NTP |
 | 전원 | DC 12 V, 130 mA |
 | 동작 온도 | -40 ~ +65 °C |
 
