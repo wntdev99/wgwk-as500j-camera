@@ -14,8 +14,23 @@ optical_zoom/
 │   ├── 04-zoom-control-guide.md ← 광학 줌 제어 통합 가이드
 │   ├── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
 │   ├── 06-live-probe-result.md  ← 실기 프로브 결과 (MC800S5, 펌웨어 V3.4.5.2)
-│   └── 07-scf-api.md            ← 비공식 SOAP 채널(SCF) — 줌 배율 read / WDR·셔터 등
-├── tools/                       ← 검증 도구
+│   ├── 07-scf-api.md            ← 비공식 SOAP 채널(SCF) — 줌 배율 read / WDR·셔터 등
+│   └── 09-library-api.md        ← wgwk_camera 라이브러리 공개 API 가이드
+├── src/wgwk_camera/             ← 외부 임포트용 라이브러리 패키지
+│   ├── __init__.py              ← 공개 API
+│   ├── facade.py                ← Camera + AdminFacade
+│   ├── control.py               ← HAPI 제어 (ControlClient)
+│   ├── image.py                 ← SCF 이미지 설정 (ImageClient)
+│   ├── video.py                 ← RTSP 저지연 캡처 (VideoStream)
+│   ├── encoding.py              ← EncodingProfile / StreamSpec
+│   ├── profiles.py              ← PRECISION 등 사전 정의 프로필
+│   ├── exceptions.py            ← CameraError 계층
+│   └── _http.py                 ← 공통 HTTP 헬퍼
+├── examples/                    ← 사용 예시
+│   ├── runtime_usage.py         ← 카메라 변경 없이 줌/스냅샷/비디오
+│   └── admin_bootstrap.py       ← dry_run/apply 인코딩 프로필 적용
+├── pyproject.toml               ← pip install -e . 지원
+├── tools/                       ← 검증·실험용 CLI (라이브러리와 별개)
 │   ├── zoom_client.py           ← Python HAPI 클라이언트 (라이브러리 + CLI)
 │   ├── scf_client.py            ← Python SCF 클라이언트 (라이브러리 + CLI)
 │   └── README.md                ← 사용법

@@ -1,0 +1,282 @@
+"""Camera 통합 Facade.
+
+외부 사용자가 가장 자주 접하는 클래스. 런타임 메서드는 직접 노출하고,
+카메라 설정을 영구 변경하는 메서드는 `cam.admin.*` 네임스페이스로 분리한다.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from .control import ControlClient
+from .encoding import EncodingProfile, merge_into_current
+from .exceptions import CameraError
+from .image import ImageClient
+from .video import VideoStream
+
+
+class Camera:
+    """WGWK-AS500J / MC800S5 카메라 통합 클라이언트.
+
+    Args:
+        host: 카메라 IP.
+        username, password: HAPI basic auth (출하 기본 admin/123456).
+        port: HTTP 포트 (기본 80).
+        scf_userid, scf_passwd: SCF 16-hex DES 토큰. 미지정 시 환경변수
+            SCF_USERID/SCF_PASSWD에서 자동 로드.
+        auto_login: True면 생성과 동시에 HAPI login + keep_alive 시작.
+
+    인스턴스 생성만으로 카메라의 인코딩이나 OSD 설정이 바뀌지 않는다.
+    설정 변경은 명시적으로 `cam.admin.*`을 호출해야 한다.
+
+    Examples:
+        런타임 사용:
+            with Camera() as cam:
+                cam.zoom_in(500)
+                with cam.video_main().opencv() as cap:
+                    ok, frame = cap.read()
+
+        Admin (1회 설정):
+            from wgwk_camera import Camera, PRECISION_PROFILE
+            cam = Camera()
+            diff = cam.admin.apply_encoding_profile(PRECISION_PROFILE)  # dry_run
+            print(diff)
+            cam.admin.apply_encoding_profile(PRECISION_PROFILE, dry_run=False)
+    """
+
+    def __init__(
+        self,
+        host: str = "192.168.8.213",
+        username: str = "admin",
+        password: str = "123456",
+        *,
+        port: int = 80,
+        scf_userid: str | None = None,
+        scf_passwd: str | None = None,
+        auto_login: bool = True,
+    ) -> None:
+        self._control = ControlClient(host=host, username=username,
+                                      password=password, port=port)
+        self._image = ImageClient(host=host, port=port,
+                                  userid=scf_userid or "", passwd=scf_passwd or "")
+        self._admin = AdminFacade(self)
+        self._host = host
+        self._user = username
+        self._password = password
+        if auto_login:
+            self._control.login()
+
+    def close(self) -> None:
+        self._control.logout()
+
+    def __enter__(self) -> "Camera":
+        if not self._control.is_logged_in:
+            self._control.login()
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
+    # ─── 컴포넌트 직접 접근 (고급 사용자) ────────────────────
+
+    @property
+    def control(self) -> ControlClient:
+        """HAPI 제어 클라이언트 (raw 접근용)."""
+        return self._control
+
+    @property
+    def image(self) -> ImageClient:
+        """SCF 이미지 설정 클라이언트 (raw 접근용)."""
+        return self._image
+
+    @property
+    def admin(self) -> "AdminFacade":
+        """카메라 설정을 변경하는 메서드들. 명시적 호출만 권장."""
+        return self._admin
+
+    # ─── 런타임 — 줌 / 포커스 / 프리셋 / 스냅샷 ────────────
+
+    def zoom_in(self, ms: int = 500) -> None:
+        self._control.zoom("in", autostop_ms=ms)
+
+    def zoom_out(self, ms: int = 500) -> None:
+        self._control.zoom("out", autostop_ms=ms)
+
+    def zoom_stop(self) -> None:
+        self._control.stop()
+
+    def focus_near(self, ms: int = 200) -> None:
+        self._control.focus("near", autostop_ms=ms)
+
+    def focus_far(self, ms: int = 200) -> None:
+        self._control.focus("far", autostop_ms=ms)
+
+    def focus_restore(self) -> None:
+        """AF 기본 위치(focus far 부근)로 복귀. PTZ advfunction FocusRestore."""
+        self._control.advfunction_exec("FocusRestore")
+
+    def move(self, direction: str, speed: int = 5, ms: int = 500) -> None:
+        self._control.move(direction, speed=speed, autostop_ms=ms)
+
+    def stop(self) -> None:
+        """모든 PTZ 동작(줌·포커스·회전) 정지."""
+        self._control.stop()
+
+    def preset_save(self, no: int) -> None:
+        self._control.preset("set", no)
+
+    def preset_call(self, no: int) -> None:
+        self._control.preset("call", no)
+
+    def preset_delete(self, no: int) -> None:
+        self._control.preset("delete", no)
+
+    def snapshot(self, path: str | None = None) -> bytes:
+        """JPEG 스냅샷 (720×480). path 지정 시 파일 저장, 항상 bytes 반환."""
+        data = self._control.snapshot_bytes()
+        if path is not None:
+            with open(path, "wb") as f:
+                f.write(data)
+        return data
+
+    # ─── 런타임 — 이미지 환경 조정 ──────────────────────────
+
+    def get_image(self) -> dict[str, str]:
+        """현재 Capture 설정. SCF 토큰 필요."""
+        return self._image.get_image()
+
+    def set_image(self, **fields: Any) -> dict[str, str]:
+        """이미지 환경 변경 (런타임 — 야간 진입, WDR ON 등). SCF 토큰 필요.
+
+        Example:
+            cam.set_image(WDRMode=1, shutter_mode_night=2, bManualGain=1, gainValue=80)
+        """
+        return self._image.set_image(**fields)
+
+    # ─── 런타임 — 비디오 스트림 ──────────────────────────────
+
+    def video_main(self, *, transport: str = "udp") -> VideoStream:
+        return VideoStream(host=self._host, kind="main",
+                           user=self._user, password=self._password,
+                           transport=transport)
+
+    def video_sub(self, *, transport: str = "udp") -> VideoStream:
+        return VideoStream(host=self._host, kind="sub",
+                           user=self._user, password=self._password,
+                           transport=transport)
+
+    def video(self, kind: str = "main", *, transport: str = "udp") -> VideoStream:
+        return VideoStream(host=self._host, kind=kind,
+                           user=self._user, password=self._password,
+                           transport=transport)
+
+    # ─── 상태 조회 (read-only) ──────────────────────────────
+
+    def info(self) -> dict:
+        return self._control.info()
+
+    def capabilities(self) -> list[str]:
+        return self._control.capability()
+
+    def function_list(self) -> list[str]:
+        return self._control.function_list()
+
+    def rtsp_urls(self) -> dict[str, str]:
+        return self._control.rtsp_urls()
+
+    def get_video_config(self) -> list[dict]:
+        """현재 인코딩 설정 read. **변경하지 않음**."""
+        return self._control.video_config()
+
+    def get_osd_enabled(self) -> bool:
+        return bool(self._control.osd_get().get("enable", 0))
+
+    def get_zoom_setpoint(self) -> dict[str, float]:
+        """SCF DzoomConfig setpoint+max. SCF 토큰 필요."""
+        return self._image.get_zoom()
+
+    def get_af(self) -> dict[str, int]:
+        return self._image.get_af()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Admin Facade — 카메라 설정 변경 메서드만 모음
+# ──────────────────────────────────────────────────────────────────
+
+class AdminFacade:
+    """카메라 설정을 영구 변경하는 메서드들.
+
+    `Camera.admin`을 통해 접근. 부주의 호출을 막기 위해 별도 네임스페이스로 분리.
+    `apply_*` 메서드는 기본적으로 `dry_run=True`로, diff만 반환하고 카메라엔
+    실제 변경을 가하지 않는다. 적용하려면 `dry_run=False`를 명시한다.
+    """
+
+    def __init__(self, cam: "Camera") -> None:
+        self._cam = cam
+
+    # ─── 인코딩 ─────────────────────────────────────────────
+
+    def apply_encoding_profile(self, profile: EncodingProfile,
+                               *, dry_run: bool = True) -> dict[int, dict]:
+        """인코딩 프로필을 카메라에 적용.
+
+        1. 현재 video_config GET
+        2. profile과 merge — bitRateControl, qp_enable 같은 부수 필드는 보존
+        3. dry_run=False면 PUT, True면 diff만 반환
+
+        Args:
+            profile: EncodingProfile.
+            dry_run: True(기본)면 변경 사항만 보여주고 실제 적용 안 함.
+
+        Returns:
+            {stream_id: {field: (old, new)}} 차이 dict.
+            빈 dict면 이미 프로필 상태와 동일.
+        """
+        current = self._cam.control.video_config()
+        merged, diff = merge_into_current(current, profile)
+        if dry_run or not diff:
+            return diff
+        self._cam.control._set_video_config(merged)
+        return diff
+
+    # ─── OSD ────────────────────────────────────────────────
+
+    def apply_osd(self, enabled: bool, *, dry_run: bool = True) -> dict:
+        """OSD 전체 토글 (시간 + Camera 타이틀).
+
+        주의: 줌 동작 중 표시되는 KF 인디케이터는 본 토글에 영향받지 않을 수
+        있다. docs/06-live-probe-result.md 참고.
+        """
+        current = self._cam.control.osd_get()
+        if bool(current.get("enable")) == bool(enabled):
+            return {"changed": False, "current": current}
+        if dry_run:
+            return {"changed": True, "from": current.get("enable"),
+                    "to": int(enabled), "dry_run": True}
+        new = dict(current)
+        new["enable"] = int(enabled)
+        self._cam.control._set_osd_full(new)
+        return {"changed": True, "from": current.get("enable"),
+                "to": int(enabled), "dry_run": False}
+
+    # ─── 재부팅 ─────────────────────────────────────────────
+
+    def reboot(self, *, confirm: bool = False) -> dict:
+        """카메라 재부팅. 30~60초 가량 다운타임 발생.
+
+        Args:
+            confirm: True를 명시적으로 전달해야 동작. False면 raise.
+
+        Raises:
+            CameraError: confirm=False일 때.
+        """
+        if not confirm:
+            raise CameraError(
+                "reboot은 명시적 confirm=True 인자가 필요합니다. "
+                "재부팅은 ~30~60s 다운타임을 동반합니다."
+            )
+        return self._cam.control._reboot()
+
+    # 공장 초기화는 의도적으로 미구현. 필요 시 직접 HAPI 호출:
+    #   GET /HAPI/V1.0/sysman/factory?uid=<SID>
+    # 모든 설정 + 네트워크 구성까지 출하 기본값으로 복원되어 IP가 바뀐다.
+    # 라이브러리에는 노출하지 않음.

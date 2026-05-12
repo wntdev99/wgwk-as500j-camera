@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wgwk-camera"
+version = "0.1.0"
+description = "WGWK-AS500J / MC800S5 IP camera client (HAPI + SCF + RTSP)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "WattRobotics", email = "jeongmin.choi@wattrobotics.ai" },
+]
+keywords = ["camera", "ipcam", "rtsp", "ptz", "hapi", "onvif", "robotics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Capture",
+]
+dependencies = [
+    "requests>=2.25",
+]
+
+[project.optional-dependencies]
+video = ["opencv-python>=4.5"]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Repository = "https://github.com/wntdev99/wgwk-as500j-camera"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"wgwk_camera" = ["py.typed"]
