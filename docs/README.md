@@ -13,9 +13,11 @@ optical_zoom/
 │   ├── 03-netsdk.md             ← NETSDK(C/C++) 정리
 │   ├── 04-zoom-control-guide.md ← 광학 줌 제어 통합 가이드
 │   ├── 05-bringup-test.md       ← Ubuntu 24.04 브링업/기본 동작 테스트 가이드
-│   └── 06-live-probe-result.md  ← 실기 프로브 결과 (MC800S5, 펌웨어 V3.4.5.2)
+│   ├── 06-live-probe-result.md  ← 실기 프로브 결과 (MC800S5, 펌웨어 V3.4.5.2)
+│   └── 07-scf-api.md            ← 비공식 SOAP 채널(SCF) — 줌 배율 read / WDR·셔터 등
 ├── tools/                       ← 검증 도구
 │   ├── zoom_client.py           ← Python HAPI 클라이언트 (라이브러리 + CLI)
+│   ├── scf_client.py            ← Python SCF 클라이언트 (라이브러리 + CLI)
 │   └── README.md                ← 사용법
 └── ref/                         ← 원본 벤더 자료
     ├── http_api.pdf             ← HAPI 사양서 PDF(VER 1.5, 2024-03-18)
@@ -61,6 +63,10 @@ optical_zoom/
    - 자세한 내용: [`03-netsdk.md`](03-netsdk.md)
 
 두 경로의 비교 및 줌 제어 통합 가이드는 [`04-zoom-control-guide.md`](04-zoom-control-guide.md) 참고.
+
+### 비공식 SOAP 채널 (SCF) — 줌 배율 read, WDR/셔터 등
+
+HAPI에 노출되지 않는 고급 기능(현재 줌 배율, WDR mode, 주·야 셔터 모드, 2D/3D DNR, HLC, 게인, 화이트밸런스, 안티플리커 등)은 카메라 웹 UI가 사용하는 **비공식 SOAP 채널**을 통해서만 접근 가능합니다. 자세한 명세와 토큰 발급 방법은 [`07-scf-api.md`](07-scf-api.md) 참고.
 
 ## 첫 수령 시 브링업 절차
 
