@@ -177,6 +177,76 @@ HAR에서 확인된 7개 호출.
 
 > **결론**: 사용자가 크롬에서 설정한 **모든 항목** (밝기, 명암, 채도, 선명도, LC, HLC, 2D DNR, 전원 주파수, 좌우 반전, WDR mode, 주·야 셔터 모드)이 모두 `Capture` 한 곳에 매핑되어 있음.
 
+### 4.3.5 `POST /setMediaVideoEncodeConfig` — **인코딩(Encode) 설정 변경**
+
+> 2026-05-12 실증 추가. HAR 캡처엔 직접 잡히지 않았으나, 본 카메라에서 인코딩
+> 변경을 가하는 유일한 동작 채널임이 검증되었다. HAPI `/system/video/set`은
+> 응답 없이 끊기며 변경도 적용되지 않는다.
+
+- **요청 바디**: `<Video><Encode>{EncodeConfig × N}{AdvanceEncodeConfig}</Encode></Video>`
+- **응답**: HTTP 202 + 빈 바디 (fire-and-forget)
+
+#### HAPI ↔ SCF 필드 매핑
+
+| HAPI (`/system/video/get`) | SCF EncodeConfig 속성 | 비고 |
+|---|---|---|
+| `streamID` | `Stream` | 1=메인, 2=서브, 3=3rd |
+| `enable` | `Enable` | 0/1 |
+| `encodeFormat` | `EncodeFormat` | "H264" / "H265" / "H265+" |
+| `resolution` | `Resolution` | "1080P", "720P", "3840X2160", ... |
+| `frameRate` | `FrameRate` | int |
+| `bitRate` | `BitRate` | kbps |
+| **`gop`** | **`Initquant`** | **이름이 Initquant이지만 GOP(IDR 간격)** |
+| `bitRateControl` | `BitRateControl` | "VBR" / "CBR" |
+| `bitRateQuality` | `BitRateQuality` | 0~5 |
+| `qp_enable` | `qp_enable` | 0/1 |
+| `qp_min`, `qp_max` | `qp_min`, `qp_max` | QP 범위 |
+
+#### 동작 검증된 페이로드 (GOP 60 → 60 적용)
+
+```xml
+<Video>
+  <Encode>
+    <EncodeConfig Stream="1" Enable="1" Resolution="1080P" EncodeFormat="H264"
+                  BitRateControl="VBR" Initquant="60" BitRateQuality="0"
+                  qp_enable="0" qp_min="30" qp_max="51"
+                  BitRate="3000" FrameRate="60"/>
+    <EncodeConfig Stream="2" Enable="1" Resolution="720X480" EncodeFormat="H264"
+                  BitRateControl="VBR" Initquant="120" BitRateQuality="0"
+                  qp_enable="0" qp_min="30" qp_max="51"
+                  BitRate="500" FrameRate="30"/>
+    <EncodeConfig Stream="3" Enable="0" Resolution="720P" EncodeFormat="H265"
+                  BitRateControl="VBR" Initquant="40" BitRateQuality="0"
+                  qp_enable="0" qp_min="28" qp_max="51"
+                  BitRate="1000" FrameRate="10"/>
+    <AdvanceEncodeConfig EncodeProfile="0" DisablePrivateData="1"
+                         TwoLensWorkMode="0" OptimumDistance="6000"/>
+  </Encode>
+</Video>
+```
+
+#### 펌웨어 GOP 클램프 동작 (실측)
+
+펌웨어는 GOP를 **frameRate의 가장 가까운 정수배**로 강제 정렬한다.
+
+| 보낸 gop | fps | 적용된 gop |
+|---|---|---|
+| 60 | 60 | 60 (=60×1) ✓ |
+| 100 | 60 | **120** (=60×2) |
+| 120 | 60 | 120 ✓ |
+| 50 | 30 | **60** (=30×2) |
+| 30 | 30 | 30 ✓ |
+
+→ 클라이언트는 GOP를 fps의 정수배(예: 1×, 2×, 4×)로 보내야 의도대로 적용됨.
+   라이브러리는 `wgwk_camera.gop_will_clamp(gop, fps)` 헬퍼를 제공한다.
+
+#### 권장 호출 패턴 (`/setMediaVideoCaptureConfig` 변경 패턴과 동일)
+
+1. `/getMediaVideoConfig` GET → `<Encode>` 블록 추출 → `<AdvanceEncodeConfig>` 보존
+2. 변경할 `EncodeConfig` 한 항목의 속성만 수정
+3. 전체 `<Video><Encode>...</Encode></Video>`을 `/setMediaVideoEncodeConfig`로 PUT
+4. HTTP 202 응답. (선택) 3초 대기 후 `/getMediaVideoConfig`로 적용 확인
+
 ### 4.4 `POST /setMediaVideoCaptureConfig` — 이미지 설정 변경
 
 - **요청 바디**: `<Video><Capture {모든 속성}>...</Capture></Video>` — **전체 페이로드 PUT 방식** (변경할 속성만이 아니라 전체 Capture를 보내야 함)

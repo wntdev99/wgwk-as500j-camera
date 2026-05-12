@@ -65,6 +65,32 @@ class EncodingProfile:
         }
 
 
+def gop_will_clamp(gop: int, fps: int) -> int | None:
+    """gop이 fps의 정수배가 아닐 때 펌웨어가 클램프할 예상 값.
+
+    실측: MC800S5 V3.4.5.2 펌웨어는 `/setMediaVideoEncodeConfig`로 임의 GOP를
+    보내면 fps의 가장 가까운 정수배로 강제 정렬한다.
+
+    Args:
+        gop: 요청한 GOP.
+        fps: 같은 스트림의 frameRate.
+
+    Returns:
+        펌웨어가 실제 적용할 GOP. 정수배면 None (클램프 없음).
+
+    Examples:
+        gop_will_clamp(100, 60) -> 120   # 60×2
+        gop_will_clamp(60, 60)  -> None  # 정수배
+        gop_will_clamp(30, 30)  -> None
+        gop_will_clamp(50, 30)  -> 60    # 30×2
+    """
+    if fps <= 0:
+        return None
+    if gop % fps == 0:
+        return None
+    return round(gop / fps) * fps
+
+
 def merge_into_current(current: list[dict], profile: EncodingProfile) -> tuple[list[dict], dict]:
     """현재 video config와 profile을 병합.
 

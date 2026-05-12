@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import socket
+import warnings
 from typing import Any
 
 from .control import ControlClient
-from .encoding import EncodingProfile, merge_into_current
-from .exceptions import CameraError
+from .encoding import EncodingProfile, gop_will_clamp, merge_into_current
+from .exceptions import CameraError, EncodingError
 from .image import ImageClient
 from .video import VideoStream
 
@@ -253,26 +254,57 @@ class AdminFacade:
     # ─── 인코딩 ─────────────────────────────────────────────
 
     def apply_encoding_profile(self, profile: EncodingProfile,
-                               *, dry_run: bool = True) -> dict[int, dict]:
+                               *, dry_run: bool = True,
+                               strict_gop: bool = False) -> dict[int, dict]:
         """인코딩 프로필을 카메라에 적용.
 
-        1. 현재 video_config GET
-        2. profile과 merge — bitRateControl, qp_enable 같은 부수 필드는 보존
-        3. dry_run=False면 PUT, True면 diff만 반환
+        1. 현재 video_config(HAPI) GET — 표시·진단 용도
+        2. profile과 merge — bitRateControl, qp_enable 등 부수 필드는 보존
+        3. GOP 클램프 가드 — fps의 정수배가 아니면 경고(또는 strict_gop=True면 raise)
+        4. dry_run=False면 SCF /setMediaVideoEncodeConfig로 PUT
+
+        주의: 본 카메라(MC800S5 V3.4.5.2)의 HAPI `/system/video/set`은 응답
+        없이 끊기고 변경도 적용되지 않는다. 따라서 인코딩 변경은 SCF로 라우팅하며,
+        SCF 토큰(SCF_USERID/SCF_PASSWD)이 필요하다.
 
         Args:
             profile: EncodingProfile.
             dry_run: True(기본)면 변경 사항만 보여주고 실제 적용 안 함.
+            strict_gop: True면 gop이 fps의 정수배가 아닐 때 EncodingError raise.
+                False(기본)면 warnings.warn 후 진행 — 펌웨어가 클램프함.
 
         Returns:
             {stream_id: {field: (old, new)}} 차이 dict.
             빈 dict면 이미 프로필 상태와 동일.
+
+        Raises:
+            EncodingError: strict_gop=True인데 gop·fps 정수배 위반.
+            AuthError: dry_run=False인데 SCF 토큰이 미설정.
         """
         current = self._cam.control.video_config()
         merged, diff = merge_into_current(current, profile)
+
+        # GOP 클램프 가드 — fps 정수배 위반 시 경고
+        for s in merged:
+            gop = s.get("gop")
+            fps = s.get("frameRate")
+            if not (isinstance(gop, int) and isinstance(fps, int)):
+                continue
+            clamped = gop_will_clamp(gop, fps)
+            if clamped is None:
+                continue
+            msg = (
+                f"stream{s.get('streamID')}: gop={gop}는 fps={fps}의 정수배가 "
+                f"아닙니다. 펌웨어가 {clamped}로 클램프할 가능성이 큼."
+            )
+            if strict_gop:
+                raise EncodingError(msg)
+            warnings.warn(msg, stacklevel=2)
+
         if dry_run or not diff:
             return diff
-        self._cam.control._set_video_config(merged)
+        # SCF 채널로 라우팅 (HAPI는 본 펌웨어에서 동작 안 함)
+        self._cam.image.set_video_encoding(merged)
         return diff
 
     # ─── OSD ────────────────────────────────────────────────

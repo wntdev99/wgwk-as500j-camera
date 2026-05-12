@@ -161,9 +161,26 @@ vs.ffmpeg_grab_frame("/tmp/frame.jpg")
 
 | 메서드 | 설명 |
 |---|---|
-| `cam.admin.apply_encoding_profile(profile, dry_run=True)` | 인코딩 변경. dry_run=True면 diff만 반환 |
+| `cam.admin.apply_encoding_profile(profile, dry_run=True, strict_gop=False)` | 인코딩 변경. dry_run=True면 diff만 반환. SCF 채널 사용(토큰 필요). |
 | `cam.admin.apply_osd(enabled, dry_run=True)` | OSD 토글 |
 | `cam.admin.reboot(confirm=True)` | 재부팅 (confirm 필요). 30~60s 다운타임 |
+
+#### `apply_encoding_profile` 동작 상세
+
+본 카메라의 HAPI `/system/video/set`은 응답 없이 연결을 끊으며 변경도 적용하지
+않는다(실증). 따라서 라이브러리는 **SCF `/setMediaVideoEncodeConfig` 채널로
+라우팅**한다. 결과:
+
+- **SCF 토큰 필요** — `Camera(scf_userid=..., scf_passwd=...)` 또는 환경변수
+  `SCF_USERID` / `SCF_PASSWD`. 미설정 시 `AuthError`.
+- **GOP는 fps의 정수배로 클램프됨** — 펌웨어 동작. 정수배 위반 시 기본은
+  `warnings.warn`, `strict_gop=True`면 `EncodingError` raise. 헬퍼:
+  ```python
+  from wgwk_camera import gop_will_clamp
+  gop_will_clamp(100, 60)  # 120 (펌웨어가 클램프할 값)
+  gop_will_clamp(60, 60)   # None (클램프 없음)
+  ```
+- **atomic** — PUT 실패 시 부분 반영 없음.
 
 > 공장 초기화는 라이브러리에 노출하지 않습니다. 필요 시 직접 `GET /HAPI/V1.0/sysman/factory` 호출.
 

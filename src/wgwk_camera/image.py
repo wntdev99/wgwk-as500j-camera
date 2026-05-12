@@ -165,6 +165,53 @@ class ImageClient:
             raise CameraError("Capture 노드를 응답에서 찾지 못함")
         return attrs
 
+    # ─── 인코딩 (Encode) ─────────────────────────────────────
+
+    # HAPI /system/video/get 응답 필드 ↔ SCF Encode XML 속성 매핑
+    _HAPI_TO_SCF_ENCODE = {
+        "streamID":       "Stream",
+        "enable":         "Enable",
+        "encodeFormat":   "EncodeFormat",
+        "resolution":     "Resolution",
+        "frameRate":      "FrameRate",
+        "bitRate":        "BitRate",
+        "gop":            "Initquant",   # 펌웨어 명명 — GOP가 Initquant로 매핑
+        "bitRateControl": "BitRateControl",
+        "bitRateQuality": "BitRateQuality",
+        "qp_enable":      "qp_enable",
+        "qp_min":         "qp_min",
+        "qp_max":         "qp_max",
+    }
+
+    def set_video_encoding(self, hapi_streams: list[dict]) -> None:
+        """SCF setMediaVideoEncodeConfig로 인코딩 변경.
+
+        HAPI `/system/video/set`은 본 펌웨어에서 응답 없이 끊기며 변경도 적용되지
+        않으므로(설계 결정 docs/09 참고), SCF 채널을 사용한다.
+
+        Args:
+            hapi_streams: HAPI `/system/video/get` 응답 형식의 list. AdminFacade에서
+                현재값과 merge한 결과를 그대로 전달.
+        """
+        # AdvanceEncodeConfig 블록은 현재값을 그대로 보존
+        xml = self.get_media_video_config()
+        adv_m = re.search(r'<AdvanceEncodeConfig\b[^/]*/?>', xml, re.DOTALL)
+        adv_xml = adv_m.group(0) if adv_m else ""
+
+        # 각 stream을 SCF EncodeConfig XML로 직렬화
+        configs: list[str] = []
+        for s in hapi_streams:
+            attrs: list[str] = []
+            for k_hapi, k_scf in self._HAPI_TO_SCF_ENCODE.items():
+                if k_hapi in s:
+                    attrs.append(f'{k_scf}="{s[k_hapi]}"')
+            configs.append("<EncodeConfig " + " ".join(attrs) + "/>")
+
+        body = f"<Video><Encode>{''.join(configs)}{adv_xml}</Encode></Video>"
+        self._post("/setMediaVideoEncodeConfig", body)
+
+    # ─── Capture (이미지 설정) ───────────────────────────────
+
     def set_image(self, **changes: Any) -> dict[str, str]:
         """Capture 속성 부분 업데이트.
 
