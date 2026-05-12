@@ -112,7 +112,27 @@ class SCFClient:
             "</soap:Envelope>"
         )
 
-    def _post(self, endpoint: str, body_inner: str = "") -> str:
+    # SCF SET endpoint 명명 패턴: 'set' + 대문자 (setPTZCmd, setMediaVideoCaptureConfig 등)
+    _SET_ENDPOINT_RE = re.compile(r"^/?set[A-Z]")
+
+    def _post(self, endpoint: str, body_inner: str = "",
+              *, allow_unsafe_empty: bool = False) -> str:
+        """SCF SOAP POST.
+
+        본 펌웨어는 /setXxxConfig에 빈 body를 보내면 해당 영역을 0/기본값으로
+        silent reset한다 (응답은 HTTP 202). _post가 이 조합을 차단한다.
+        의도적 호출이면 allow_unsafe_empty=True를 명시.
+        """
+        if (not allow_unsafe_empty
+                and not body_inner.strip()
+                and self._SET_ENDPOINT_RE.match(endpoint)):
+            raise SCFError(
+                f"SCF SET endpoint {endpoint!r}에 빈 body 전송 차단됨. "
+                f"펌웨어가 해당 영역을 0/기본값으로 silent reset한다 "
+                f"(예: setMediaVideoCaptureConfig empty → Brightness/Contrast 등 "
+                f"19개 필드 0으로 리셋). 전체 구조체 XML을 body_inner로 전달하거나 "
+                f"allow_unsafe_empty=True 지정. 근거: docs/08-endpoint-probe-2026-05-12.md §A."
+            )
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         resp = self._session.post(
             url,

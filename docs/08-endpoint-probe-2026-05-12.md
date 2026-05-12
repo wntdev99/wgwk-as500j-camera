@@ -208,6 +208,38 @@ probe 과정에서 라이브러리 미커버 endpoint를 다수 확인:
 
 - **`/Event/subscription/regist`**: `ServerType` 파라미터의 유효값과 `CMD_ZOOM_MULTIPLE_NOTIFY`(PTZ_BASE+6) 등을 푸시 받는 구조 확인 필요. 사양서 `ref/http_api.pdf` §2.1.6(이벤트 구독 메커니즘) 참조.
 
+## 8.A 사고 분석 — `/setMediaVideoCaptureConfig` 빈 body silent reset
+
+본 probe 진행 중 AF endpoint 비교 baseline 호출에서 `POST /setMediaVideoCaptureConfig` 에 **빈 SOAP body** 를 전송한 결과, 펌웨어가 Capture 영역의 19개 필드를 0/기본값으로 silent reset함을 사후 확인 (2026-05-12).
+
+### 재현 (1회 검증)
+
+```
+BEFORE: Brightness=128, Contrast=128, Saturation=128, Sharpness=128, WDRValue=128,
+        TNF=128, SNF=128, WB_RGB=8421504, shutter_speed_day/night=1000,
+        IrcutSensitivity=50, led_brightness_value=100, ...
+  ↓ POST /setMediaVideoCaptureConfig  body=<soap:Body></soap:Body>  → HTTP 202
+AFTER : Brightness=0, Contrast=0, Saturation=0, Sharpness=0, WDRValue=0,
+        TNF=0, SNF=0, WB_RGB=0, shutter_speed_day/night=10,
+        IrcutSensitivity=0, led_brightness_value=0, ...
+```
+
+응답은 HTTP 202(빈 본문)으로 `setMediaVideoEncodeConfig`·`setPTZCmd` 정상 호출과 구별되지 않음.
+
+### 영향 및 복구
+
+- 영향 범위: SCF Capture 영역 19개 필드 (모두 0 또는 시간 필드는 `00:00:00`, shutter는 10으로 클램프)
+- 복구: `set_image(**baseline 값)` 한 번에 19개 필드 일괄 PUT으로 즉시 복원 — `get_image()`로 정상값 확인 완료
+
+### 영구 대책 (`ImageClient._post` 가드)
+
+- 패턴 `^/?set[A-Z]` (SCF SET endpoint) + `body_inner.strip() == ""` 조합을 **CameraError 로 차단**.
+- 옵트인 우회: `_post(..., allow_unsafe_empty=True)`. 실제 적용 사례 없음(향후 의도적 reset 시도용).
+- 동일 가드를 `tools/scf_client.SCFClient._post` 에도 적용.
+- 검증: `/setMediaVideoCaptureConfig`, `/setPTZCmd`, `/setMediaVideoEncodeConfig`, `/setPtzAfConfig`, `/setPtzConfig`, `/setAfConfig` 모두 빈 body로 호출 시 차단되며, `set_image()` 등 정상 호출 흐름은 영향 없음.
+
+> 다른 SET endpoint(예: `/setPtzConfig`, `/setPtzCommonConfig`, `/setPtzAdvanceConfig`)도 동일하게 silent reset 거동을 보일 가능성이 있으나 (Step B/C/D 미수행), 가드가 endpoint 이름 무관하게 패턴 매칭하므로 일률적으로 차단된다.
+
 ## 8.6 재현 명령
 
 ```bash
