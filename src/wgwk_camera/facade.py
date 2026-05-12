@@ -20,6 +20,7 @@ from .encoding import (
 from .exceptions import CameraError, EncodingError
 from .image import ImageClient
 from .video import VideoStream
+from .zoom_tracker import ZoomTracker
 
 
 def check_reachable(host: str, port: int = 80, timeout: float = 2.0) -> None:
@@ -79,6 +80,8 @@ class Camera:
         auto_login: bool = True,
         preflight: bool = True,
         preflight_timeout: float = 2.0,
+        zoom_full_travel_ms: int = 12000,
+        zoom_max_multiplier: float = 10.0,
     ) -> None:
         """
         Args:
@@ -86,6 +89,10 @@ class Camera:
                 안 하면 즉시 CameraError. False면 첫 메서드 호출까지 지연.
             preflight_timeout: 도달성 확인 timeout (초).
             auto_login: True(기본)면 preflight 통과 후 HAPI 로그인 + keep_alive.
+            zoom_full_travel_ms: wide↔tele 전체 이동 시간 (ms). 카메라별 실측
+                권장 — 본 카메라(AS500J/MC800S5)는 약 10~12s. SW-side zoom 추정
+                정확도에 직접 영향.
+            zoom_max_multiplier: 최대 줌 배율 (기본 10x — SCF `multiple_max` 값).
         """
         if preflight:
             check_reachable(host, port, timeout=preflight_timeout)
@@ -94,6 +101,10 @@ class Camera:
         self._image = ImageClient(host=host, port=port,
                                   userid=scf_userid or "", passwd=scf_passwd or "")
         self._admin = AdminFacade(self)
+        self._zoom = ZoomTracker(
+            max_multiplier=zoom_max_multiplier,
+            full_travel_ms=zoom_full_travel_ms,
+        )
         self._host = host
         self._user = username
         self._password = password
@@ -141,12 +152,52 @@ class Camera:
 
     def zoom_in(self, ms: int = 500) -> None:
         self._control.zoom("in", autostop_ms=ms)
+        self._zoom.apply_zoom_in(ms)
 
     def zoom_out(self, ms: int = 500) -> None:
         self._control.zoom("out", autostop_ms=ms)
+        self._zoom.apply_zoom_out(ms)
 
     def zoom_stop(self) -> None:
         self._control.stop()
+
+    # ─── SW-side 줌 배율 추정 (모터 absolute encoder 부재 대응) ─
+
+    @property
+    def zoom_level(self) -> float | None:
+        """추정 줌 배율 (1.0=광각, max=망원). `None`이면 미앵커.
+
+        모터 absolute encoder가 펌웨어에서 노출되지 않아 (`docs/08 §8.5`),
+        클라이언트 측 시간 적분 추정. 정확도 ±10~30%. 장기 운영 시 N분마다
+        `anchor_wide()` 호출로 drift 보정 권장.
+        """
+        return self._zoom.estimate
+
+    def anchor_wide(self, *, hard_limit_ms: int = 15000,
+                    settle_extra_s: float = 2.0) -> None:
+        """광각 끝까지 이동 후 추정을 `min_multiplier`(=1.0)로 고정.
+
+        `hard_limit_ms`는 모터 전체 이동 시간 + 마진. 이 시간 후엔 모터가 wide
+        hard-limit에 saturate된 상태가 보장된다.
+
+        Args:
+            hard_limit_ms: zoom_out 발사 시간 (기본 15s — full travel 12s+여유).
+            settle_extra_s: hard_limit 후 모터·AF settle 대기 (기본 2s).
+        """
+        self._control.zoom("out", autostop_ms=hard_limit_ms)
+        time.sleep(hard_limit_ms / 1000 + settle_extra_s)
+        self._zoom.anchor_wide()
+
+    def anchor_tele(self, *, hard_limit_ms: int = 15000,
+                    settle_extra_s: float = 2.0) -> None:
+        """망원 끝까지 이동 후 추정을 `max_multiplier`(=10.0)로 고정."""
+        self._control.zoom("in", autostop_ms=hard_limit_ms)
+        time.sleep(hard_limit_ms / 1000 + settle_extra_s)
+        self._zoom.anchor_tele()
+
+    def set_zoom_estimate(self, multiplier: float) -> None:
+        """외부 정보로 추정값 직접 주입 (사용자가 실제 배율을 안다고 가정)."""
+        self._zoom.set_estimate(multiplier)
 
     def focus_near(self, ms: int = 200) -> None:
         self._control.focus("near", autostop_ms=ms)
@@ -188,8 +239,13 @@ class Camera:
         부재의 결과로 추정. 운영에서 zoom 위치 정확도가 필요하면 SW-side 추적을
         병행하거나 preset 사용 자체를 피할 것. 자세한 검증은
         `docs/08-endpoint-probe-2026-05-12.md §8.D`.
+
+        호출 후 SW-side 줌 추정(`zoom_level`)은 무효화된다 (이동 결과를 알 수
+        없으므로). 사용을 계속하려면 `anchor_wide()` 또는 `anchor_tele()`로
+        재앵커링.
         """
         self._control.preset("call", no)
+        self._zoom.invalidate()
 
     def preset_delete(self, no: int) -> None:
         """preset `no` 삭제. save/list/delete API 자체는 정상 동작."""

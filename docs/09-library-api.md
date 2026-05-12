@@ -101,6 +101,10 @@ Camera(host="192.168.8.101",
 | `cam.focus_restore()` | AF 기본 위치 복귀 |
 | `cam.move(dir, speed=5, ms=500)` | 회전 (`left`/`right`/`up`/`down`/대각선 8방향) |
 | `cam.stop()` | 모든 PTZ 정지 |
+| `cam.zoom_level -> float \| None` | SW-side 추정 줌 배율 (1.0=wide, max=tele). 미앵커면 `None`. 자세한 한계는 §12 |
+| `cam.anchor_wide(hard_limit_ms=15000)` | wide hard-limit 도달 + 추정을 1.0으로 고정 (~15s 소요) |
+| `cam.anchor_tele(hard_limit_ms=15000)` | tele hard-limit 도달 + 추정을 max로 고정 |
+| `cam.set_zoom_estimate(x)` | 외부 정보로 추정값 직접 주입 |
 | `cam.preset_save(n)` | 현재 위치를 프리셋 n에 저장 ⚠ |
 | `cam.preset_call(n)` | 프리셋 n으로 이동 ⚠ |
 | `cam.preset_delete(n)` | 프리셋 n 삭제 |
@@ -420,3 +424,68 @@ res = cam.wait_for_af_lock(min_var=base * 0.7)
 | `interval_s` | sampling 간격 | None (자동: `max(1/fps, 0.2s)`) |
 | `warmup_s` | 측정 시작 전 grace | 0.3~1.0s |
 | `min_var` | lock 인정 최소 variance | None 또는 baseline의 50~70% |
+
+## 12. SW-side 줌 배율 추정 (`zoom_level`, `anchor_wide/tele`)
+
+본 카메라는 모터 absolute encoder를 어느 채널로도 노출하지 않는다 (`docs/08 §8.5`, `§8.D`). 따라서 정확한 모터 위치 읽기는 불가능. `Camera.zoom_level`은 **클라이언트 측 시간 적분 추정**을 반환한다.
+
+### 동작 원리
+
+```
+velocity = (max_multiplier - min_multiplier) / full_travel_ms
+estimate += velocity × ms   (zoom_in 시)
+estimate -= velocity × ms   (zoom_out 시)
+clamp at [min_multiplier, max_multiplier]
+```
+
+생성 시 `zoom_level == None` (미앵커). `anchor_wide()` 또는 `anchor_tele()` 호출 후 추적 시작.
+
+### 사용 패턴
+
+```python
+cam = Camera("192.168.8.101", zoom_full_travel_ms=12000)
+print(cam.zoom_level)  # None (미앵커)
+
+cam.anchor_wide()       # 15s 소요. wide hard-limit + estimate=1.0
+print(cam.zoom_level)   # 1.0
+
+cam.zoom_in(3000)
+print(cam.zoom_level)   # 3.25 (3000ms × 9/12000 = +2.25)
+
+# 장기 운영 시 drift 보정
+if 어떤_조건:
+    cam.anchor_wide()   # 추정 재초기화
+```
+
+### 정확도 한계
+
+실측 (192.168.8.101 V3.4.5.2, 2026-05-12):
+- 기본값 `full_travel_ms=12000` 으로 `zoom_in 10000ms` 후 SW estimate=10.0(clamped)이었으나 **시각적으로는 모터가 5~6x 부근에 머묾**.
+- 본 카메라의 실제 full travel은 12s보다 길다 (대략 18~20s 추정). `full_travel_ms` 파라미터를 카메라별 calibration으로 조정 권장.
+- 캘리브레이션 절차:
+  1. `anchor_wide(hard_limit_ms=15000)` — wide 끝
+  2. `cam.zoom_in(N_ms); cam.wait_for_af_lock(...)` 반복하면서 frame 캡처
+  3. 시야 변화가 멈추는 시점의 누적 ms = 실제 full travel
+  4. `Camera(zoom_full_travel_ms=measured)` 로 재생성
+
+### `preset_call` 후 자동 invalidate
+
+`cam.preset_call(n)` 호출 시 `zoom_level`이 자동으로 `None`이 된다. preset 복귀가 신뢰 불가하므로 (`docs/08 §8.D`) 이동 결과를 추적할 수 없기 때문. 이후 `anchor_*()`로 재초기화 필요.
+
+### API 정리
+
+| 메서드 | 의미 |
+|---|---|
+| `cam.zoom_level -> float \| None` | 추정 배율 (1.0=wide). `None`이면 미앵커 |
+| `cam.anchor_wide(*, hard_limit_ms=15000, settle_extra_s=2.0)` | wide hard-limit + 1.0으로 앵커 |
+| `cam.anchor_tele(*, hard_limit_ms=15000, settle_extra_s=2.0)` | tele hard-limit + max로 앵커 |
+| `cam.set_zoom_estimate(x)` | 외부 정보 주입 (예: 사용자가 실제 배율을 안다) |
+| `cam.zoom_in(ms)` / `cam.zoom_out(ms)` | 명령 발사 + estimate 자동 갱신 |
+| `cam.preset_call(n)` | 발사 + estimate invalidate |
+
+### 생성자 파라미터
+
+| 파라미터 | 디폴트 | 의미 |
+|---|---|---|
+| `zoom_full_travel_ms` | 12000 | wide↔tele 전체 이동 시간. **카메라별 실측 권장** |
+| `zoom_max_multiplier` | 10.0 | SCF `multiple_max` 값. AS500J/MC800S5 = 10x |

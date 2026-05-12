@@ -41,6 +41,7 @@ from .profiles import (
     ROBOT_VISION_PROFILE,
 )
 from .video import VideoStream
+from .zoom_tracker import ZoomTracker
 
 __version__ = "0.1.0"
 
@@ -54,6 +55,8 @@ __all__ = [
     # 인코딩 / 프로필
     "EncodingProfile", "StreamSpec", "merge_into_current", "gop_will_clamp",
     "validate_against_capability",
+    # 줌 추정
+    "ZoomTracker",
     "PRECISION_PROFILE", "ROBOT_VISION_PROFILE",
     "BANDWIDTH_SAVE_PROFILE", "FAST_TRACKING_PROFILE", "ALL_PROFILES",
     # Capture 필드 카탈로그
