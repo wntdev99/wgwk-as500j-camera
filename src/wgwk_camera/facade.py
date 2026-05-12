@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import socket
+import time
 import warnings
 from typing import Any
 
@@ -247,6 +248,141 @@ class Camera:
 
     def get_af(self) -> dict[str, int]:
         return self._image.get_af()
+
+    # `wait_for_af_lock` interval 하한: 1/fps가 너무 작을 때
+    # 같은 GOP 내 비슷한 프레임만 보면 false stable이 됨.
+    _AF_LOCK_MIN_INTERVAL_S = 0.2
+
+    def wait_for_af_lock(
+        self,
+        *,
+        max_wait_s: float = 10.0,
+        min_wait_s: float = 1.5,
+        stable_window: int = 3,
+        rel_tol: float = 0.05,
+        interval_s: float | None = None,
+        warmup_s: float = 0.3,
+        min_var: float | None = None,
+    ) -> dict[str, Any]:
+        """메인 스트림 프레임 선명도가 안정되는 시점을 감지해 AF lock 시점을 추정.
+
+        펌웨어가 AF lock 이벤트를 어떤 채널로도 push하지 않으므로 (HAPI/SCF/ONVIF
+        부재, Event subscription에도 AF는 없음 — `docs/08-endpoint-probe-2026-05-12.md`
+        참고), 클라이언트 측에서 Laplacian variance plateau를 감지한다.
+
+        매 `interval_s`마다 메인 스트림 한 프레임을 디코드해 그레이스케일 Laplacian
+        variance를 측정. 최근 `stable_window` 개 샘플의 상대 변동
+        `(max-min)/mean` 이 `rel_tol` 이하면 lock으로 판정.
+
+        Args:
+            max_wait_s: 최대 대기 (초). 도달하면 `locked=False`로 반환.
+            min_wait_s: 안정 판정 시작 전 최소 측정 시간. AF는 발사 후 lock까지
+                보통 1~3초 걸리므로 이 시간 이전에는 stability check를 skip해
+                false positive(흐린데 안정으로 잘못 판정)를 막는다.
+            stable_window: 안정 판정용 슬라이딩 윈도우 크기.
+            rel_tol: `(max-min)/mean` 임계값. 작을수록 엄격.
+            interval_s: 샘플링 간격(초). `None`(기본)이면 `max(1/fps, 0.2)`로 결정 —
+                fps가 매우 높아도 200 ms보다 짧게 sampling하지 않는다(같은 GOP 내
+                비슷한 프레임만 보면 false stable이 됨).
+            warmup_s: 측정 시작 전 grace period — RTSP 버퍼에 줌 이전 프레임이
+                남아 있을 수 있어 처음 N초는 측정에서 제외.
+            min_var: lock으로 인정할 variance 하한. `None`(기본)이면 검사 안 함.
+                지정하면 윈도우 평균 variance가 이 값 미만일 때 안정성을 만족해도
+                lock으로 판정하지 않음 — 흐린 정적 장면을 lock으로 오인하는 false
+                positive를 막는다. 사용 시 베이스라인 var를 미리 측정해 임계값으로
+                전달 (예: 베이스라인의 50%).
+
+        Returns:
+            ```
+            {
+                "locked": bool,
+                "elapsed_s": float,        # 시작부터 종료까지 (warmup 포함)
+                "samples": int,            # 변동 계산에 사용된 샘플 수
+                "fps_used": float,         # 메인 스트림 fps (interval 도출용)
+                "interval_s": float,       # 실제 적용된 sample 간격
+                "final_var": float,
+                "history": list[list[float]],  # [[t_seconds, var], ...]
+            }
+            ```
+
+        Raises:
+            CameraError: cv2(opencv-python) 미설치 또는 RTSP 연결 실패.
+
+        Note:
+            정적 장면 가정. 장면 자체가 움직이면 (사람·차량 등) variance가
+            안정되지 않아 false negative 발생 가능 — 그 경우 `max_wait_s`까지
+            대기 후 `locked=False` 반환.
+        """
+        try:
+            import cv2  # lazy import — opencv-python은 선택적 의존성
+        except ImportError as e:
+            raise CameraError(
+                "wait_for_af_lock requires opencv-python. "
+                "Install: pip install opencv-python"
+            ) from e
+
+        # fps 결정 — 메인 스트림(streamID=1) frameRate
+        vcfg = self._control.video_config()
+        main = next((s for s in vcfg if s.get("streamID") == 1), None)
+        fps = float(main.get("frameRate", 30)) if main else 30.0
+        iv = (interval_s if interval_s is not None
+              else max(1.0 / fps, self._AF_LOCK_MIN_INTERVAL_S))
+
+        history: list[list[float]] = []
+        t_start = time.monotonic()
+        next_sample_at = t_start + warmup_s
+        final_var = 0.0
+
+        with self.video_main().opencv() as cap:
+            while True:
+                ok, frame = cap.read()
+                t_now = time.monotonic()
+                elapsed = t_now - t_start
+
+                if not ok:
+                    if elapsed >= max_wait_s:
+                        break
+                    continue
+
+                if t_now < next_sample_at:
+                    continue  # 프레임은 받지만 sample은 미수집
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                final_var = var
+                history.append([elapsed, var])
+                next_sample_at = t_now + iv
+
+                # 안정성 검사 — min_wait_s 이전에는 skip
+                if elapsed >= min_wait_s and len(history) >= stable_window:
+                    window = [h[1] for h in history[-stable_window:]]
+                    wmean = sum(window) / len(window)
+                    wmax, wmin = max(window), min(window)
+                    stable = wmean > 0 and (wmax - wmin) / wmean <= rel_tol
+                    sharp_enough = min_var is None or wmean >= min_var
+                    if stable and sharp_enough:
+                        return {
+                            "locked": True,
+                            "elapsed_s": elapsed,
+                            "samples": len(history),
+                            "fps_used": fps,
+                            "interval_s": iv,
+                            "final_var": var,
+                            "history": history,
+                        }
+
+                if elapsed >= max_wait_s:
+                    break
+
+        return {
+            "locked": False,
+            "elapsed_s": time.monotonic() - t_start,
+            "samples": len(history),
+            "fps_used": fps,
+            "interval_s": iv,
+            "final_var": final_var,
+            "history": history,
+        }
 
 
 # ──────────────────────────────────────────────────────────────────

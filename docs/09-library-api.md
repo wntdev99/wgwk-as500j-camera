@@ -152,6 +152,7 @@ vs.ffmpeg_grab_frame("/tmp/frame.jpg")
 | `cam.capabilities() -> list[str]` | 능력집 키 정렬 리스트 |
 | `cam.function_list() -> list[str]` | 지원 HAPI 엔드포인트 |
 | `cam.rtsp_urls() -> dict` | `{'ch0_main': '...', 'ch0_sub': '...'}` |
+| `cam.wait_for_af_lock(*, max_wait_s, min_wait_s, stable_window, rel_tol, interval_s, warmup_s, min_var) -> dict` | 메인 스트림 Laplacian variance plateau 감지로 AF settling 추정. fps에서 interval 자동 산출 (`max(1/fps, 0.2s)`). 자세한 한계는 §11.A 참고 |
 | `cam.get_video_config() -> list[dict]` | 현재 인코딩 (각 stream) |
 | `cam.video_capabilities() -> list[dict]` | 지원 codec×해상도×fps×bitrate (`/system/video/capability`) |
 | `cam.audio_capabilities() -> list[dict]` | 지원 오디오 코덱 (`/system/audio/capability`) |
@@ -331,3 +332,64 @@ except CameraError as e:
 - Ubuntu 24.04 + Python 3.12 + requests 2.31
 - 카메라 펌웨어 `V3.4.5.2 build 2025-11-12`
 - 검증 절차: `docs/06-live-probe-result.md`, `docs/07-scf-api.md`
+
+## 11.A `wait_for_af_lock()` 한계와 사용 가이드
+
+### 본질적 한계
+
+펌웨어가 AF lock 시점을 HAPI / SCF / ONVIF / Event subscription 어느 채널로도 노출하지 않는다 (`docs/08-endpoint-probe-2026-05-12.md` §8.5). 따라서 본 메서드는 카메라에 묻지 않고 **클라이언트 측에서 메인 스트림 프레임의 Laplacian variance plateau를 감지**한다.
+
+**측정하는 것**: "선명도가 시간에 따라 변하지 않는다"
+**측정 못 하는 것**: "AF가 실제로 lock 됐다"
+
+흐린 정적 장면도 variance가 안정이므로 lock으로 판정될 수 있다 (false positive). 실측 예 (192.168.8.101, V3.4.5.2):
+
+| 시나리오 | locked | final_var | 실제 |
+|---|---|---|---|
+| 선명한 정적 장면 | True (1.85s) | 3537 | ✓ 선명 |
+| AF off 후 줌 모터 이동 → 흐림 정적 | True (1.86s) | 315 | **흐림** — 함수는 plateau를 보고 lock으로 판정 |
+
+### 실용 사용 패턴
+
+**A. 줌 모션 직후 호출 — 가장 안전**
+
+AF가 발사된 직후라면 plateau 도달 = AF lock 완료일 가능성 큼.
+
+```python
+cam.zoom_in(800)              # AF trigger
+res = cam.wait_for_af_lock()  # 모터 정지 + AF settle까지 대기
+if res["locked"]:
+    cam.snapshot("frame.jpg")
+```
+
+**B. `min_var` 임계 + 베이스라인 calibration**
+
+장면별 baseline variance를 미리 측정해서 임계로 사용.
+
+```python
+import cv2
+with cam.video_main().opencv() as cap:
+    for _ in range(15): cap.read()  # warmup
+    _, frame = cap.read()
+base = cv2.Laplacian(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+# 이후
+res = cam.wait_for_af_lock(min_var=base * 0.7)
+```
+
+장면의 텍스처 dynamic range가 좁으면(흐림/선명 var 차이 < 2배) `min_var`도 신뢰성 낮음. 카메라 시야가 풍부한 디테일을 포함할 때 효과적.
+
+**C. 100% 정확한 lock 신호가 필요하면**
+
+본 라이브러리로는 불가. NETSDK 포트 8091(XML_TOPSEE) 풀 클라이언트 구현으로 `CMD_NOTIFY_AF_*` 푸시 수신 필요 — 별도의 큰 작업.
+
+### 파라미터 가이드
+
+| 파라미터 | 의미 | 권장 |
+|---|---|---|
+| `max_wait_s` | 최대 대기 (timeout) | 5~15s |
+| `min_wait_s` | 안정 검사 시작 전 최소 측정 시간. 너무 짧으면 RTSP 첫 프레임만 보고 false stable | 1.5s 이상 |
+| `stable_window` | 안정 판정용 슬라이딩 윈도우 | 3~5 |
+| `rel_tol` | `(max-min)/mean` 임계. 작을수록 엄격 | 0.05 (5%) |
+| `interval_s` | sampling 간격 | None (자동: `max(1/fps, 0.2s)`) |
+| `warmup_s` | 측정 시작 전 grace | 0.3~1.0s |
+| `min_var` | lock 인정 최소 variance | None 또는 baseline의 50~70% |

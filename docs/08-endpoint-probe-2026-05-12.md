@@ -240,6 +240,52 @@ AFTER : Brightness=0, Contrast=0, Saturation=0, Sharpness=0, WDRValue=0,
 
 > 다른 SET endpoint(예: `/setPtzConfig`, `/setPtzCommonConfig`, `/setPtzAdvanceConfig`)도 동일하게 silent reset 거동을 보일 가능성이 있으나 (Step B/C/D 미수행), 가드가 endpoint 이름 무관하게 패턴 매칭하므로 일률적으로 차단된다.
 
+## 8.B `/Event/subscription/regist` 라이브 probe — AF lock 이벤트 부재 확인
+
+### 사양서 명세
+
+`ref/http_api.pdf` §3.2.1:
+```
+POST /HAPI/V1.0/Event/subscription/regist
+Body: {
+  "ServerType": 0,         // 0=IPv4, 1=domain (단순 enum)
+  "ServerName": "192.168.x.x",
+  "Port": <client TCP port>,
+  "Duration": 30~3600,
+  "PostURLPrefix": "",
+  "EventType": "all" or "MotionDetect,ObjectDetect,..."
+}
+```
+
+서버(카메라) → 클라이언트: `POST /HAPI/V1.0/Event/Notification` 단기 HTTP 연결로 JSON 푸시.
+
+### 실측 (192.168.8.101, NUC8 192.168.8.102:9998 listener)
+
+- 등록 HTTP 200, `ID=1`, `TerminationTime=+60s` ✓
+- listener에 즉시 4개 NetworkDetect 이벤트 도착 (등록 직후 sync)
+- 30초간 `set_af(False→True)` 토글, `zoom_in/out 800ms` 발사 → **AF/Zoom/PTZ 관련 이벤트 0건**
+- 삭제 HTTP 200 정상 처리
+
+### 푸시되는 이벤트 카탈로그 (사양서 + 본 카메라 capability)
+
+```json
+{"AlarmType": "NetworkDetect", "AlarmSubType": "NetworkDisconnected",
+ "TimeStamp": ..., "OccurFlag": "true"/"false", "DeviceID": "..."}
+```
+
+본 카메라(`/Smart/capability`)가 지원:
+- `MotionDetect` (SupportMotionDetect=1)
+- `ObjectDetect` (SupportTargetDetect=1) — 사람/차량/오토바이/자전거
+- 미지원: FaceFd, LPR, RegionAI, AudioDetect, CoverDetect, VG, Fire
+
+**AF, PTZ, Zoom 상태 변화는 어떤 AlarmType에도 매핑되지 않음** — 사양서 표에 없고 라이브 trigger 시 푸시되지 않음.
+
+### 결론 (AF lock 감지)
+
+이벤트 푸시로는 불가. 대안:
+1. **클라이언트 측 variance plateau 감지** — `Camera.wait_for_af_lock()` (한계는 `docs/09-library-api.md §11.A` 참고).
+2. **NETSDK 8091 채널 풀 구현** — `CMD_NOTIFY_AF_*` 가능성 있으나 큰 작업.
+
 ## 8.6 재현 명령
 
 ```bash
