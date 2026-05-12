@@ -288,7 +288,18 @@ class ImageClient:
             **changes: 변경할 속성. 예) `set_image(Brightness=200, WDRMode=1)`.
 
         Returns:
-            업데이트 후의 Capture dict.
+            업데이트 후의 Capture dict. 모든 값은 문자열.
+
+        Note:
+            펌웨어가 일부 필드를 조건부로 거부할 수 있다 — 예) `IrcutKeepColor=1`
+            은 `IrcutMode≠0`일 때만 의미가 있어 다른 모드에서는 SET 호출이
+            HTTP 202를 반환하면서도 실제 값은 변경되지 않는다. **반환값으로 실제
+            적용 여부를 확인할 것**. round-trip 검증 결과는 `docs/09-library-api.md
+            §7.A` 참조.
+
+        Raises:
+            ValueError: `CAPTURE_FIELDS`에 없는 키가 `changes`에 있을 때.
+            CameraError: SCF 통신 실패 또는 SET endpoint 보안 가드 위반.
         """
         current = self.get_image()
         new = dict(current)

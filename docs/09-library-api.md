@@ -236,7 +236,7 @@ cam.admin.apply_encoding_profile(CUSTOM, dry_run=False)   # 실제 적용
 
 ## 7. `ImageClient.set_image()` 필드 카탈로그
 
-전체 47개 속성은 `wgwk_camera.CAPTURE_FIELDS` 또는 `docs/07-scf-api.md` §4.3 참조. 자주 쓰는 항목:
+`wgwk_camera.CAPTURE_FIELDS` 에 46개 속성 전체가 정의되어 있고, 라이브러리는 펌웨어가 응답하는 모든 필드를 100% 커버한다 (2026-05-12 V3.4.5.2 기준 round-trip 검증). 자주 쓰는 항목:
 
 | 필드 | 의미 |
 |---|---|
@@ -246,11 +246,36 @@ cam.admin.apply_encoding_profile(CUSTOM, dry_run=False)   # 실제 적용
 | `TNF`, `SNF` | 3D / 2D 노이즈 감소 |
 | `HLC`, `BackLight` | 강한 빛 보정 / 역광 보정 |
 | `bManualGain`, `gainValue` | 수동 게인 활성 / 값 |
-| `WB_RGB` | 화이트밸런스 |
+| `WB_RGB` | 화이트밸런스 (32-bit 패킹: `(enable<<24) \| (R<<16) \| (G<<8) \| B`) |
 | `DfrogFlag`, `DfrogValue` | 안개 제거 |
 | `forct_antiflicker` | 전원 주파수 (안티플리커) |
 | `HFlip`, `VFlip`, `rotate` | 반전·회전 |
 | `IrcutMode`, `IrcutNightStartTime`/`EndTime` | IRCUT 주·야 |
+| `led_mode`, `led_brightness_mode`, `led_brightness_value` | 보조 LED |
+| `aov_mode`, `aov_fps` | Always-On-Video |
+| `isp_mode_color`, `isp_mode_night`, `videoEncodeMode`, `ispadvmode` | ISP 모드 |
+| `cropxpix`, `cropypix` | 비디오 크롭 |
+| `TVSystem` | 0=NTSC 60Hz, 1=PAL 50Hz |
+| `light_off_sensitivity`, `face_exposure_sensitivity` | LED 차단/얼굴 노출 감도 |
+
+### 7.A 검증 결과 (round-trip 실측, 2026-05-12 V3.4.5.2)
+
+46개 필드를 baseline 값에서 소폭 변경 후 GET back으로 검증:
+
+- **44개 accepted** — SET 호출 시 펌웨어가 즉시 수락하고 GET back으로 변경값 확인. 종료 시 baseline 완전 복원.
+- **1개 conditional rejection — `IrcutKeepColor`**: `IrcutMode=0`(auto) 상태에서 `IrcutKeepColor=1` SET 시 GET back은 `0`. 펌웨어가 조건부 거부 (아마 IRcut auto 모드에서는 keep-color 정책이 무의미). `IrcutMode≠0` 상태에서는 수락 가능성 있으나 미검증.
+- **1개 retry needed — `WDRStartTime`**: 일시 HTTP 연결 오류 1건 (필드 자체는 정상; 다음 호출에서 정상 수락 기대).
+
+### 7.B `set_image()` 사용 권장 패턴
+
+```python
+# 변경 후 반환값으로 실제 적용 확인 — 펌웨어가 일부 필드를 조건부 거부할 수 있음
+updated = cam.set_image(Brightness=200, IrcutKeepColor=1)
+if updated.get("IrcutKeepColor") != "1":
+    print("IrcutKeepColor not applied — check IrcutMode preconditions")
+```
+
+`set_image()`는 항상 GET back된 dict를 반환하므로 caller가 반드시 실제 적용값을 확인하는 것이 권장. 일부 필드는 다른 필드의 상태에 따라 조건부로만 수락된다.
 
 런타임 환경 변화 패턴:
 
