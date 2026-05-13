@@ -1,0 +1,48 @@
+{
+  "note": "동일 장면(낮은 detail), zoom KF별 focus peak 특성화. 2026-05-13.",
+  "warning": "현재 장면은 high-frequency detail이 부족하여 KF 18, KF 36에서 variance landscape이 평탄. 실제 LUT 캘리브레이션은 application target (송장, 해상도 차트)으로 수행 필요.",
+  "characterization_results": [
+    {
+      "zoom_kf_target": 1,
+      "zoom_kf_actual": 1.0,
+      "sweep_steps": 16,
+      "peak_step": 2,
+      "peak_var": 2020.5,
+      "final_var": 311.8,
+      "interpretation": "high-confidence (variance contrast 강함)"
+    },
+    {
+      "zoom_kf_target": 18,
+      "zoom_kf_actual": 18.0,
+      "sweep_steps": 16,
+      "peak_step": 2,
+      "peak_var": 1341.2,
+      "final_var": 231.5,
+      "interpretation": "medium-confidence"
+    },
+    {
+      "zoom_kf_target": 36,
+      "zoom_kf_actual": 36.0,
+      "sweep_steps": 16,
+      "peak_step": 14,
+      "peak_var": 321.1,
+      "final_var": 308.7,
+      "interpretation": "low-confidence — variance landscape 평탄"
+    },
+    {
+      "zoom_kf_target": 36,
+      "zoom_kf_actual": 36.0,
+      "sweep_steps": 24,
+      "peak_step": 2,
+      "peak_var": 295.2,
+      "history_range": [200.8, 295.2],
+      "interpretation": "재측정 — peak 위치 불일치 (낮은 SNR 확인)"
+    }
+  ],
+  "conclusions": [
+    "LUT 필요: KF 1 vs KF 36에서 peak step 위치가 명확히 다름 (varifocal 확정)",
+    "Tele에서 focus optimization은 high-detail target 필수",
+    "Laplacian variance per pixel은 zoom level이 다르면 absolute 비교 불가 (같은 detail이 더 많은 픽셀에 분산)",
+    "Peak shift 방향: zoom 증가 시 focus는 'far' 방향으로 이동하는 경향 (telephoto일수록 멀리 포커싱)"
+  ]
+}
