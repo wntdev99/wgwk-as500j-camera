@@ -550,6 +550,109 @@ zoom_in(500)   x1 -> KF 1.0 → 3.7 (예상 +500/185=2.7)
 zoom_in(500)   x2 -> KF 3.7 → 6.4
 ```
 
+## 8.H Zoom·Focus 병렬 HAPI 명령 실증 (2026-05-13)
+
+**검증 결과**: HAPI는 zoom·focus concurrent command를 **완전히 허용**. 펌웨어
+직렬화 없음. Wall-clock = `max(T_zoom, T_focus)` 적용 가능.
+
+### 테스트 스크립트
+
+`scripts/test_parallel_zoom_focus.py` — Python `threading.Thread`로 두 HAPI
+명령을 동시 발사하고 wall-clock 비교.
+
+### 실측 (3회 반복, AF OFF, autostop_ms=500)
+
+```
+Sequential (zoom_in 500 → focus_near 500): 1018ms ± 1ms
+Parallel   (zoom_out 500 ‖ focus_far 500):  516ms ± 1ms
+  zoom thread  duration:   506ms
+  focus thread duration:   516ms
+zoom_level 변화 (parallel 시): 11.8 → 9.1  (모터 실제 이동 확인)
+```
+
+### 분석
+
+- Sequential = 500 + 500 + 18ms overhead
+- Parallel ≈ `max(506, 516)` = 516ms
+- 절약 502ms (49%) — 이론치와 거의 완벽히 일치
+
+### 함의
+
+1. zoom·focus 모터는 **독립 회로** (varifocal 렌즈 기구적 특성과 일치)
+2. HAPI HTTP layer가 **command queue serialization 없음**
+3. Pipeline 운용 시 `zoom_command || focus_command` 패턴으로 ~500ms 단축
+4. `docs/10 §10.2` timing budget의 sequential 가정은 보수적이었음
+   → 시나리오 B(중간 거리 분포) win 영역으로 이동
+
+### 향후 검증 필요
+
+- ✅ HAPI ack ≠ motor settling — `§8.I` 측정 완료
+- ⚠ 장기 안정성 (수백 cycle, thread 충돌, HAPI 부하)
+- ⚠ Focus 모터 backlash (양방향 LUT 분리 필요 여부)
+
+---
+
+## 8.I 모터 settling time 측정 (2026-05-13)
+
+**검증 동기**: `§8.H`에서 HAPI ack = `min(autostop_ms, 1000ms)`은 명령 수신
+시각이지 모터 완료 시각이 아니라는 점을 짚었음. 실제 capture timing 결정에는
+"ack 이후 영상이 안정화되기까지의 추가 시간(settle gap)"이 필요.
+
+### 테스트 스크립트
+
+`scripts/test_motor_settling.py`:
+- RTSP main stream (4K @ 60fps target)을 cv2.VideoCapture로 직접 read
+- zoom/focus 명령을 threading으로 발사하며 ack 시각 기록
+- 명령 발사 후 2.5초간 frame 연속 capture (~150~230 frames)
+- Zoom: frame-to-frame **pixel diff** (motor가 픽셀 이동시킴)
+- Focus: frame-to-frame **Laplacian variance 변화량** (sharpness 변화)
+- Motion window: 첫 spike → 마지막 spike (quiet_consec 20 frame)
+
+### 결과 (autostop_ms=500, AF off)
+
+| 명령 | HAPI ack | 모션 종료 (영상) | ack→settle gap |
+|---|---|---|---|
+| zoom in 500ms | 506ms | 915ms | **+409ms** |
+| zoom out 500ms | 511ms | 904ms | **+393ms** |
+| focus near 500ms | 509ms | 1101ms | **+592ms** |
+| focus far 500ms | 514ms | (검출 noise 많음) | ~500ms (추정) |
+
+### 핵심 관찰
+
+1. **HAPI ack ≠ image-stable**: ack 시점에 영상은 아직 모션 중. 추가 400~600ms
+   대기가 필요.
+2. **Zoom < Focus settling**: zoom motor가 focus motor보다 100~200ms 빨리 안정.
+   추측 원인: focus는 lens element가 더 미세하게 움직이며 sharpness가 천천히
+   stabilize됨. Zoom은 큰 변위라 motor 자체 정지 시점이 명확.
+3. **포함된 latency**: RTSP H.264 encode → network buffer → cv2 decode buffer.
+   따라서 절대 측정값은 모터 자체 + 스트림 buffer 합. Snapshot endpoint에서는
+   더 짧을 수 있음 (별도 검증 필요).
+4. **Focus 검출이 어렵다**: Laplacian variance가 motor 미세 운동에도 계속
+   변동되어 정확한 종료점 검출이 까다로움. 보수적으로 **600ms gap** 적용 권장.
+
+### 실용 가이드 (capture timing)
+
+**병렬 + settle 적용 시 end-to-end timing**:
+```
+t=0      : cam.zoom_and_focus_parallel(...) 호출
+t≈516ms  : 함수 return (ack 둘 다 받음)
+t≈1100ms : 영상 안정 (settle ≈ 600ms 추가)
+t≈1116ms : cap.read() → 첫 stable frame (60fps 1프레임)
+```
+
+직렬 대비 절약:
+- Sequential + settle: 1018 + 600 = **1618ms**
+- Parallel + settle:    516 + 600 = **1116ms**
+- **절약 502ms (31%)** — settle 추가에도 병렬 이득 유지
+
+### 추가 측정 권장
+
+- ⚠ Snapshot endpoint vs RTSP stream의 latency 비교
+- ⚠ 더 짧은 autostop_ms (100/200ms)에서의 settle gap (KF 1 step 운용 시 중요)
+- ⚠ 동시 발사한 두 모터의 settle 차이 (focus가 더 느리므로 focus 기준으로 대기)
+
+---
+
 ## 8.6 재현 명령
 
 ```bash

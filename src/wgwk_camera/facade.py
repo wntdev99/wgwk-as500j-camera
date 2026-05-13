@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import socket
+import threading
 import time
 import warnings
 from typing import Any
@@ -282,6 +283,103 @@ class Camera:
 
     def focus_far(self, ms: int = 200) -> None:
         self._control.focus("far", autostop_ms=ms)
+
+    def zoom_and_focus_parallel(
+        self,
+        *,
+        zoom: tuple[str, int] | None = None,
+        focus: tuple[str, int] | None = None,
+    ) -> dict[str, float]:
+        """Zoom·focus 명령을 병렬 실행.
+
+        Varifocal 렌즈는 zoom·focus 모터가 물리적으로 독립이고 HAPI 펌웨어가
+        concurrent command를 직렬화하지 않는다 (`docs/08 §8.H` 실측).
+        Wall-clock = `max(T_zoom, T_focus)` 까지 단축됨 (실측 49% 감소).
+
+        Args:
+            zoom: `("in", autostop_ms)` 또는 `("out", autostop_ms)`. `None`이면 zoom skip.
+            focus: `("near", autostop_ms)` 또는 `("far", autostop_ms)`. `None`이면 focus skip.
+
+        Returns:
+            `{"duration_total_s", "duration_zoom_s", "duration_focus_s"}`.
+            skip된 모터는 0.0.
+
+        Raises:
+            ValueError: direction이 잘못된 경우.
+            CameraError / 기타: 스레드 내부 예외는 호출자에게 재전파됨.
+
+        Examples:
+            >>> # zoom in 500ms + focus near 500ms 동시 (≈516ms wall-clock)
+            >>> cam.zoom_and_focus_parallel(zoom=("in", 500), focus=("near", 500))
+            >>> # zoom만 (focus 모터 정지 상태 유지)
+            >>> cam.zoom_and_focus_parallel(zoom=("in", 1000))
+
+        Note:
+            - `zoom_ms > 4500`이면 내부적으로 rapid-fire (blocking). 이 경우에도
+              focus 스레드는 병렬로 실행되어 zoom 완료 전에 focus가 끝남.
+            - HAPI ack는 motor settling 완료를 의미하지 않음. capture 직전에
+              추가 settle 시간이 필요할 수 있음 (`docs/08 §8.H` 후속 검증 항목).
+        """
+        if zoom is None and focus is None:
+            return {"duration_total_s": 0.0, "duration_zoom_s": 0.0, "duration_focus_s": 0.0}
+
+        if zoom is not None:
+            z_dir, z_ms = zoom
+            if z_dir not in ("in", "out"):
+                raise ValueError(f"zoom direction must be 'in' or 'out', got {z_dir!r}")
+        if focus is not None:
+            f_dir, f_ms = focus
+            if f_dir not in ("near", "far"):
+                raise ValueError(f"focus direction must be 'near' or 'far', got {f_dir!r}")
+
+        durations = {"zoom": 0.0, "focus": 0.0}
+        excs: dict[str, BaseException | None] = {"zoom": None, "focus": None}
+
+        def zoom_worker() -> None:
+            s = time.perf_counter()
+            try:
+                if z_dir == "in":
+                    self.zoom_in(z_ms)
+                else:
+                    self.zoom_out(z_ms)
+            except BaseException as e:
+                excs["zoom"] = e
+            durations["zoom"] = time.perf_counter() - s
+
+        def focus_worker() -> None:
+            s = time.perf_counter()
+            try:
+                if f_dir == "near":
+                    self.focus_near(f_ms)
+                else:
+                    self.focus_far(f_ms)
+            except BaseException as e:
+                excs["focus"] = e
+            durations["focus"] = time.perf_counter() - s
+
+        threads: list[threading.Thread] = []
+        if zoom is not None:
+            threads.append(threading.Thread(target=zoom_worker, name="wgwk-zoom"))
+        if focus is not None:
+            threads.append(threading.Thread(target=focus_worker, name="wgwk-focus"))
+
+        t0 = time.perf_counter()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        total = time.perf_counter() - t0
+
+        if excs["zoom"] is not None:
+            raise excs["zoom"]
+        if excs["focus"] is not None:
+            raise excs["focus"]
+
+        return {
+            "duration_total_s": total,
+            "duration_zoom_s": durations["zoom"],
+            "duration_focus_s": durations["focus"],
+        }
 
     def focus_restore(self) -> None:
         """AF 기본 위치(focus far 부근)로 복귀. PTZ advfunction FocusRestore."""
