@@ -80,7 +80,7 @@ class Camera:
         auto_login: bool = True,
         preflight: bool = True,
         preflight_timeout: float = 2.0,
-        zoom_full_travel_ms: int = 12000,
+        zoom_full_travel_ms: int = 9000,
         zoom_max_multiplier: float = 10.0,
     ) -> None:
         """
@@ -89,9 +89,10 @@ class Camera:
                 안 하면 즉시 CameraError. False면 첫 메서드 호출까지 지연.
             preflight_timeout: 도달성 확인 timeout (초).
             auto_login: True(기본)면 preflight 통과 후 HAPI 로그인 + keep_alive.
-            zoom_full_travel_ms: wide↔tele 전체 이동 시간 (ms). 카메라별 실측
-                권장 — 본 카메라(AS500J/MC800S5)는 약 10~12s. SW-side zoom 추정
-                정확도에 직접 영향.
+            zoom_full_travel_ms: wide↔tele 전체 이동 시간 (ms). 기본 9000ms는
+                본 카메라(MC800S5 V3.4.5.2) 실측 캘리브레이션 결과의 평균값
+                (zoom_in≈9800ms, zoom_out≈7700ms). 카메라 개체별로 실측 권장.
+                `docs/09 §12` 캘리브레이션 절차 참조.
             zoom_max_multiplier: 최대 줌 배율 (기본 10x — SCF `multiple_max` 값).
         """
         if preflight:

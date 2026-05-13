@@ -422,6 +422,37 @@ SCF_USERID=... SCF_PASSWD=... python3 ./scripts/preset_4stage_test.py
 # (script: tmp 디렉토리에 단일 파일로 작성 후 실행, 이 문서 §8.D 절차)
 ```
 
+## 8.E zoom_full_travel_ms 캘리브레이션 (2026-05-13)
+
+ZoomTracker(`docs/09 §12`)의 `full_travel_ms` 파라미터 실측. 모터 saturation 시점을 메인 스트림 프레임 히스토그램 변화 분석으로 식별.
+
+### 방법
+- `anchor_wide()` (15s zoom_out으로 wide hard-limit) 후 `zoom_in(25000ms)` 한 번에 발사
+- 1초 간격 ffmpeg 프레임 캡처 (총 ~25 샘플)
+- 인접 프레임 16-bin 정규화 히스토그램 L1 distance 계산
+- noise floor (마지막 5개 delta 평균) × 2 를 threshold로, 3 consecutive 이하 시점 = saturation
+- 반대 방향(`anchor_tele()` → `zoom_out(20000ms)`)도 동일 측정
+
+### 결과 (192.168.8.101, V3.4.5.2)
+
+| 방향 | saturation 시점 | full_travel_ms |
+|---|---|---|
+| zoom_in | T+9.8s | ~9800 |
+| zoom_out | T+7.7s | ~7700 |
+| **평균** | — | **~8800** |
+
+모터가 in/out 방향에 약 15% 비대칭. 단일 파라미터 모델로는 표현 못 함.
+
+### 관찰
+- T+1s 시점 이미 `KF 16X` OSD 표시 (camera 자체의 zoom multiplier 표시. 우리 `multiple_max=10.0`과 의미 다름 — KF는 별도 카운터)
+- 모터가 빠르게 max 도달 후 미세 조정 — 비선형 속도 프로파일 의심
+- 27s 후 정지 시점(`99_tele_end.jpg`) 시각이 motion 중 캡처(`01s.jpg`)보다 wider — 모터가 hard limit에 부딪힌 후 약간 retract하는 backlash compensation 추정
+
+### 결정
+- `ZoomTracker.full_travel_ms` 기본값 12000 → **9000**으로 갱신 (평균 8800에 약간 보수적 가산)
+- docs/09 §12에 캘리브레이션 절차 코드 예시 추가
+- 캡처 파일: `/tmp/zoom_calib_2026_05_13/`
+
 ## 8.6 재현 명령
 
 ```bash

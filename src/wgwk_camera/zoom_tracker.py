@@ -28,12 +28,14 @@ class ZoomTracker:
         max_multiplier: 최대 줌 배율 (10x 광학). SCF DzoomConfig.multiple_max에서 확인.
         min_multiplier: 최소 줌 배율 (광각, 1.0x).
         full_travel_ms: wide↔tele 전체 이동 시간 (ms). 카메라/펌웨어별 실측 권장.
-            기본 12000ms는 본 카메라 실측 기반 보수값 (실제 ≈ 10s).
+            기본 9000ms는 본 카메라(MC800S5 V3.4.5.2) 실측 평균:
+            zoom_in saturation ~9800ms, zoom_out saturation ~7700ms. 평균 ~8800ms.
+            모터가 in/out 방향에 약간 비대칭이며 ±20% 오차 허용.
     """
 
     max_multiplier: float = 10.0
     min_multiplier: float = 1.0
-    full_travel_ms: int = 12000
+    full_travel_ms: int = 9000
 
     _estimate: float | None = field(default=None, init=False, repr=False)
 

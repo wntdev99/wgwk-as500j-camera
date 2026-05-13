@@ -457,16 +457,47 @@ if 어떤_조건:
     cam.anchor_wide()   # 추정 재초기화
 ```
 
-### 정확도 한계
+### 정확도 한계 및 캘리브레이션
 
-실측 (192.168.8.101 V3.4.5.2, 2026-05-12):
-- 기본값 `full_travel_ms=12000` 으로 `zoom_in 10000ms` 후 SW estimate=10.0(clamped)이었으나 **시각적으로는 모터가 5~6x 부근에 머묾**.
-- 본 카메라의 실제 full travel은 12s보다 길다 (대략 18~20s 추정). `full_travel_ms` 파라미터를 카메라별 calibration으로 조정 권장.
-- 캘리브레이션 절차:
-  1. `anchor_wide(hard_limit_ms=15000)` — wide 끝
-  2. `cam.zoom_in(N_ms); cam.wait_for_af_lock(...)` 반복하면서 frame 캡처
-  3. 시야 변화가 멈추는 시점의 누적 ms = 실제 full travel
-  4. `Camera(zoom_full_travel_ms=measured)` 로 재생성
+본 카메라(MC800S5 V3.4.5.2) 실측 결과 (2026-05-13):
+- `anchor_wide()` 후 `zoom_in(25000ms)` 발사하며 1초 간격 프레임 히스토그램 변화 추적
+- 모터 saturation (delta가 noise floor로 떨어지는 시점):
+  - **zoom_in 방향: ~9.8s**
+  - **zoom_out 방향: ~7.7s**
+  - 평균 ~8.8s, 모터 in/out 비대칭 약 ±15%
+- 기본값 `full_travel_ms=9000` 은 이 평균. 카메라 개체별 calibration 권장.
+
+캘리브레이션 절차 (단일 카메라용):
+```python
+from wgwk_camera import Camera
+import cv2, time, numpy as np
+
+cam = Camera("192.168.8.101")
+cam.anchor_wide(hard_limit_ms=15000, settle_extra_s=3)
+
+# zoom_in 25s 발사하며 1s 간격 capture
+cam.zoom_in(25000)
+t0 = time.time()
+prev_hist = None
+deltas = []
+while time.time() - t0 < 27:
+    if (time.time() - t0) < int(time.time() - t0) + 0.05:
+        continue
+    cam.video_main().ffmpeg_grab_frame('/tmp/calib.jpg')
+    g = cv2.imread('/tmp/calib.jpg', cv2.IMREAD_GRAYSCALE)
+    h = cv2.calcHist([g],[0],None,[16],[0,256]).flatten()
+    h /= h.sum()
+    if prev_hist is not None:
+        deltas.append((time.time()-t0, float(np.abs(prev_hist-h).sum())))
+    prev_hist = h
+    time.sleep(1.0)
+
+# 3 연속 delta가 noise (≤2× tail mean)로 떨어지는 시점 = saturation
+# 그 시점의 ms = 본 카메라 full_travel_ms
+# Camera(..., zoom_full_travel_ms=measured) 로 재생성
+```
+
+장면 텍스처가 풍부할 때 정확도 ±15%, 텍스처 부족하면 ±30% 이상 가능. 또한 모터 속도가 줌 범위 내 비선형일 가능성(앞부분 빠름, 끝부분 느림) — 단일 `full_travel_ms` 파라미터로는 이 비선형을 표현 못 함. 정확도가 critical하면 N분마다 `anchor_wide()` 재호출로 drift 보정 권장.
 
 ### `preset_call` 후 자동 invalidate
 
@@ -487,5 +518,5 @@ if 어떤_조건:
 
 | 파라미터 | 디폴트 | 의미 |
 |---|---|---|
-| `zoom_full_travel_ms` | 12000 | wide↔tele 전체 이동 시간. **카메라별 실측 권장** |
+| `zoom_full_travel_ms` | 9000 | wide↔tele 전체 이동 시간. 본 카메라 실측 평균 (in≈9800, out≈7700). **카메라별 실측 권장** |
 | `zoom_max_multiplier` | 10.0 | SCF `multiple_max` 값. AS500J/MC800S5 = 10x |
