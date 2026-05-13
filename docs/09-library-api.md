@@ -105,6 +105,7 @@ Camera(host="192.168.8.101",
 | `cam.anchor_wide(hard_limit_ms=15000)` | wide hard-limit 도달 + 추정을 1.0으로 고정 (~15s 소요) |
 | `cam.anchor_tele(hard_limit_ms=15000)` | tele hard-limit 도달 + 추정을 max로 고정 |
 | `cam.set_zoom_estimate(x)` | 외부 정보로 추정값 직접 주입 |
+| `cam.calibrate_zoom_travel(direction="both", ...)` | 모터 full_travel_ms 자동 측정 + tracker 갱신 (~1분) |
 | `cam.preset_save(n)` | 현재 위치를 프리셋 n에 저장 ⚠ |
 | `cam.preset_call(n)` | 프리셋 n으로 이동 ⚠ |
 | `cam.preset_delete(n)` | 프리셋 n 삭제 |
@@ -462,40 +463,41 @@ if 어떤_조건:
 본 카메라(MC800S5 V3.4.5.2) 실측 결과 (2026-05-13):
 - `anchor_wide()` 후 `zoom_in(25000ms)` 발사하며 1초 간격 프레임 히스토그램 변화 추적
 - 모터 saturation (delta가 noise floor로 떨어지는 시점):
-  - **zoom_in 방향: ~9.8s**
-  - **zoom_out 방향: ~7.7s**
-  - 평균 ~8.8s, 모터 in/out 비대칭 약 ±15%
+  - **zoom_in 방향: ~9.8s ~ 10.8s** (개체/시점별 변동)
+  - **zoom_out 방향: ~7.7s ~ 7.9s**
+  - 평균 ~8.8 ~ 9.4s, 모터 in/out 비대칭 약 15~30%
 - 기본값 `full_travel_ms=9000` 은 이 평균. 카메라 개체별 calibration 권장.
 
-캘리브레이션 절차 (단일 카메라용):
+#### 자동 캘리브레이션 — `Camera.calibrate_zoom_travel()`
+
+수동 측정 절차를 한 줄로:
 ```python
-from wgwk_camera import Camera
-import cv2, time, numpy as np
-
 cam = Camera("192.168.8.101")
-cam.anchor_wide(hard_limit_ms=15000, settle_extra_s=3)
-
-# zoom_in 25s 발사하며 1s 간격 capture
-cam.zoom_in(25000)
-t0 = time.time()
-prev_hist = None
-deltas = []
-while time.time() - t0 < 27:
-    if (time.time() - t0) < int(time.time() - t0) + 0.05:
-        continue
-    cam.video_main().ffmpeg_grab_frame('/tmp/calib.jpg')
-    g = cv2.imread('/tmp/calib.jpg', cv2.IMREAD_GRAYSCALE)
-    h = cv2.calcHist([g],[0],None,[16],[0,256]).flatten()
-    h /= h.sum()
-    if prev_hist is not None:
-        deltas.append((time.time()-t0, float(np.abs(prev_hist-h).sum())))
-    prev_hist = h
-    time.sleep(1.0)
-
-# 3 연속 delta가 noise (≤2× tail mean)로 떨어지는 시점 = saturation
-# 그 시점의 ms = 본 카메라 full_travel_ms
-# Camera(..., zoom_full_travel_ms=measured) 로 재생성
+result = cam.calibrate_zoom_travel(direction="both")
+# {
+#   "zoom_in_ms": 10810, "zoom_out_ms": 7900,
+#   "recommended_ms": 9355, "asymmetry_pct": 31.1,
+#   "updated": True,  # self._zoom.full_travel_ms = 9355
+#   "history_in":  [[t, delta], ...],
+#   "history_out": [[t, delta], ...],
+# }
 ```
+
+기본 동작:
+1. `anchor_wide()` → 15s zoom_out으로 wide hard-limit
+2. `zoom_in(25000ms)` 발사 + 1초 간격 ffmpeg 프레임 캡처 + 히스토그램 L1 distance 측정
+3. saturation 감지 (3 consecutive deltas ≤ 2 × noise floor) → `zoom_in_ms`
+4. `anchor_tele()` → 반대 방향 측정 → `zoom_out_ms`
+5. 평균을 `recommended_ms`, `update_tracker=True`(기본)면 `self._zoom.full_travel_ms` 갱신
+
+소요 시간 ~1분. 정적 장면 권장. 동적 장면이면 noise 증가로 saturation 식별 실패 가능 (`zoom_in_ms` 또는 `zoom_out_ms` = `None` 반환).
+
+옵션:
+- `direction`: `"in"`, `"out"`, `"both"`(기본)
+- `max_motion_s`: 한 방향 모터 시간 (기본 25s)
+- `sample_interval_s`: 프레임 sampling 간격 (기본 1.0s)
+- `saturation_window`: 안정 판정 연속 샘플 수 (기본 3)
+- `update_tracker`: 측정 후 `full_travel_ms` 자동 갱신 (기본 True)
 
 장면 텍스처가 풍부할 때 정확도 ±15%, 텍스처 부족하면 ±30% 이상 가능. 또한 모터 속도가 줌 범위 내 비선형일 가능성(앞부분 빠름, 끝부분 느림) — 단일 `full_travel_ms` 파라미터로는 이 비선형을 표현 못 함. 정확도가 critical하면 N분마다 `anchor_wide()` 재호출로 drift 보정 권장.
 
@@ -512,6 +514,7 @@ while time.time() - t0 < 27:
 | `cam.anchor_tele(*, hard_limit_ms=15000, settle_extra_s=2.0)` | tele hard-limit + max로 앵커 |
 | `cam.set_zoom_estimate(x)` | 외부 정보 주입 (예: 사용자가 실제 배율을 안다) |
 | `cam.zoom_in(ms)` / `cam.zoom_out(ms)` | 명령 발사 + estimate 자동 갱신 |
+| `cam.calibrate_zoom_travel(...)` | 모터 full_travel_ms 자동 측정 + tracker 갱신 (~1분) |
 | `cam.preset_call(n)` | 발사 + estimate invalidate |
 
 ### 생성자 파라미터

@@ -200,6 +200,167 @@ class Camera:
         """외부 정보로 추정값 직접 주입 (사용자가 실제 배율을 안다고 가정)."""
         self._zoom.set_estimate(multiplier)
 
+    def calibrate_zoom_travel(
+        self,
+        *,
+        direction: str = "both",
+        max_motion_s: float = 25.0,
+        sample_interval_s: float = 1.0,
+        saturation_window: int = 3,
+        anchor_settle_extra_s: float = 3.0,
+        update_tracker: bool = True,
+    ) -> dict[str, Any]:
+        """모터 wide↔tele 전체 이동 시간 자동 측정.
+
+        절차:
+          1. `anchor_wide()` (또는 `anchor_tele()`) 로 한쪽 hard-limit 도달
+          2. 반대 방향으로 `max_motion_s` 길이의 단일 zoom 명령 발사
+          3. `sample_interval_s` 간격으로 메인 스트림 프레임을 ffmpeg로 캡처
+          4. 인접 프레임의 16-bin 그레이스케일 히스토그램 L1 distance 측정
+          5. noise floor(말미 5개 평균) × 2 를 임계로, `saturation_window`개
+             연속 샘플이 임계 이하인 첫 시점 = 모터 saturation
+          6. `direction='both'`(기본)이면 양 방향 측정 후 평균을 추천값으로 반환
+
+        Args:
+            direction: `"in"`, `"out"`, 또는 `"both"`.
+            max_motion_s: 한 방향 모터 명령 시간. saturation 도달 보장 위해
+                실제 full travel보다 충분히 길게 (기본 25s).
+            sample_interval_s: 프레임 sampling 간격. ffmpeg overhead ~0.5~1s이므로
+                너무 작게 잡지 말 것.
+            saturation_window: 안정 판정 연속 샘플 수.
+            anchor_settle_extra_s: 각 측정 전 anchor 후 추가 settle 대기.
+            update_tracker: True(기본)면 측정값(both면 평균)으로
+                `self._zoom.full_travel_ms` 자동 갱신.
+
+        Returns:
+            ```
+            {
+                "zoom_in_ms": int | None,
+                "zoom_out_ms": int | None,
+                "recommended_ms": int,
+                "asymmetry_pct": float | None,  # |in-out|/avg
+                "history_in":  list[[t, delta]],
+                "history_out": list[[t, delta]],
+                "updated": bool,
+            }
+            ```
+            `*_ms`가 `None`이면 해당 방향 측정 실패 (saturation 미감지).
+
+        Raises:
+            CameraError: cv2(opencv-python) 미설치 또는 RTSP 캡처 실패.
+
+        Note:
+            전체 소요 시간 ~1분(both 방향). 정적 장면 권장 (동적 장면은 noise
+            증가로 saturation 식별 실패 가능). 모터 비선형 거동으로 in/out이
+            10~20% 차이 나는 게 정상.
+        """
+        try:
+            import cv2
+            import numpy as np
+        except ImportError as e:
+            raise CameraError(
+                "calibrate_zoom_travel requires opencv-python + numpy. "
+                "Install: pip install opencv-python numpy"
+            ) from e
+
+        if direction not in ("in", "out", "both"):
+            raise ValueError("direction must be 'in', 'out', or 'both'")
+
+        def _hist(gray):
+            h = cv2.calcHist([gray], [0], None, [16], [0, 256]).flatten()
+            return h / (h.sum() + 1e-9)
+
+        def _capture_gray():
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+                self.video_main().ffmpeg_grab_frame(f.name)
+                return cv2.imread(f.name, cv2.IMREAD_GRAYSCALE)
+
+        def _measure_one(setup_fn, motion_fn) -> tuple[int | None, list[list[float]]]:
+            """한 방향 측정. setup_fn: anchor. motion_fn: 반대 방향 큰 명령."""
+            setup_fn()
+            time.sleep(anchor_settle_extra_s)
+
+            g0 = _capture_gray()
+            if g0 is None:
+                raise CameraError("calibrate_zoom_travel: RTSP frame capture failed")
+            prev_hist = _hist(g0)
+
+            motion_fn()
+            t0 = time.time()
+            history: list[list[float]] = []
+            target = sample_interval_s
+            while time.time() - t0 < max_motion_s + sample_interval_s:
+                now = time.time() - t0
+                if now < target:
+                    time.sleep(0.05)
+                    continue
+                g = _capture_gray()
+                t_actual = time.time() - t0
+                if g is None:
+                    target = int(t_actual) + sample_interval_s
+                    continue
+                h = _hist(g)
+                d = float(np.abs(prev_hist - h).sum())
+                history.append([round(t_actual, 2), round(d, 4)])
+                prev_hist = h
+                target = int(t_actual) + sample_interval_s
+
+            # saturation 분석
+            if len(history) < saturation_window + 2:
+                return None, history
+            tail_n = min(5, len(history))
+            noise = sum(d for _, d in history[-tail_n:]) / tail_n
+            threshold = max(noise * 2.0, 0.005)
+            for i in range(len(history) - saturation_window + 1):
+                window = history[i:i + saturation_window]
+                if all(d <= threshold for _, d in window):
+                    return int(window[0][0] * 1000), history
+            return None, history
+
+        result: dict[str, Any] = {
+            "zoom_in_ms": None,
+            "zoom_out_ms": None,
+            "history_in": [],
+            "history_out": [],
+            "updated": False,
+            "asymmetry_pct": None,
+            "recommended_ms": self._zoom.full_travel_ms,
+        }
+
+        if direction in ("in", "both"):
+            in_ms, hist_in = _measure_one(
+                setup_fn=lambda: self.anchor_wide(hard_limit_ms=15000, settle_extra_s=0),
+                motion_fn=lambda: self.zoom_in(int(max_motion_s * 1000)),
+            )
+            result["zoom_in_ms"] = in_ms
+            result["history_in"] = hist_in
+
+        if direction in ("out", "both"):
+            out_ms, hist_out = _measure_one(
+                setup_fn=lambda: self.anchor_tele(hard_limit_ms=15000, settle_extra_s=0),
+                motion_fn=lambda: self.zoom_out(int(max_motion_s * 1000)),
+            )
+            result["zoom_out_ms"] = out_ms
+            result["history_out"] = hist_out
+
+        # 권장값 산정
+        a, b = result["zoom_in_ms"], result["zoom_out_ms"]
+        if a is not None and b is not None:
+            result["recommended_ms"] = (a + b) // 2
+            result["asymmetry_pct"] = round(abs(a - b) / ((a + b) / 2) * 100, 1)
+        elif a is not None:
+            result["recommended_ms"] = a
+        elif b is not None:
+            result["recommended_ms"] = b
+        # else: 둘 다 None → 기존 값 유지
+
+        if update_tracker and (a is not None or b is not None):
+            self._zoom.full_travel_ms = result["recommended_ms"]
+            result["updated"] = True
+
+        return result
+
     def focus_near(self, ms: int = 200) -> None:
         self._control.focus("near", autostop_ms=ms)
 
