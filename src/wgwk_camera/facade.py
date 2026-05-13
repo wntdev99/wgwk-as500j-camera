@@ -287,6 +287,145 @@ class Camera:
         """AF 기본 위치(focus far 부근)로 복귀. PTZ advfunction FocusRestore."""
         self._control.advfunction_exec("FocusRestore")
 
+    def focus_sweep_best(
+        self,
+        *,
+        sweep_steps: int = 20,
+        step_ms: int = 500,
+        settle_per_step_s: float = 0.6,
+        anchor_steps: int = 10,
+        anchor_direction: str = "near",
+        fine_tune: bool = True,
+        af_off: bool = True,
+        restore_af: bool = False,
+    ) -> dict[str, Any]:
+        """수동 포커스 sweep + Laplacian variance peak 탐색.
+
+        절차:
+          1. (af_off=True) AF off (수동 모드 진입)
+          2. `anchor_direction` 방향으로 `anchor_steps × step_ms` 발사 → 끝점 anchor
+          3. 반대 방향으로 `sweep_steps × step_ms` 발사. 각 step 후 메인 스트림
+             프레임을 캡처해 그레이스케일 Laplacian variance 측정.
+          4. variance 최대인 step (peak) 식별.
+          5. anchor 방향으로 `sweep_steps - peak_step - 1` step 복귀.
+          6. (fine_tune=True) sweep 방향으로 1 step 추가 시도 — variance가 더
+             높으면 유지, 낮으면 원위치 복귀. Motor hysteresis 보정.
+          7. (restore_af=True) AF 다시 on.
+
+        Args:
+            sweep_steps: sweep 분할 수 (기본 20).
+            step_ms: 각 step focus 명령의 autostop_ms (기본 500).
+            settle_per_step_s: 각 step 후 motor + RTSP settle 대기 (기본 0.6s).
+            anchor_steps: 시작 anchor 발사 횟수 (기본 10 → 5s near 끝까지).
+            anchor_direction: `"near"` 또는 `"far"`. anchor가 sweep 반대 방향.
+            fine_tune: True(기본)면 복귀 후 ±1 step 시도해 hysteresis 보정.
+            af_off: True(기본)면 시작 시 AF off.
+            restore_af: True면 종료 시 AF on. 기본 False (수동 상태 유지).
+
+        Returns:
+            ```
+            {
+                "anchor_direction": str,
+                "sweep_history": list[[step, variance]],
+                "peak_step": int,
+                "peak_var": float,
+                "final_var": float,
+                "fine_tune_applied": int,  # +1 (가산) 또는 0 (변경 없음)
+                "duration_s": float,
+                "af_state_at_exit": str,   # "on" / "off"
+            }
+            ```
+
+        Raises:
+            CameraError: cv2(opencv-python) 미설치 또는 RTSP 캡처 실패.
+            ValueError: anchor_direction이 'near'/'far'가 아닐 때.
+
+        Note:
+            기본 파라미터로 약 30~40초 소요 (sweep 12s + 캡처 12s + anchor/복귀 +
+            fine_tune). 정적 장면 권장. 완료 후 AF 상태는 `restore_af` 인자로 제어
+            — 기본은 수동 모드 유지(off).
+        """
+        try:
+            import cv2
+            import tempfile
+        except ImportError as e:
+            raise CameraError(
+                "focus_sweep_best requires opencv-python."
+            ) from e
+
+        if anchor_direction not in ("near", "far"):
+            raise ValueError("anchor_direction must be 'near' or 'far'")
+        sweep_dir = "far" if anchor_direction == "near" else "near"
+
+        def _measure() -> float:
+            with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+                self.video_main().ffmpeg_grab_frame(f.name)
+                img = cv2.imread(f.name, cv2.IMREAD_GRAYSCALE)
+                if img is None:
+                    raise CameraError("focus_sweep_best: RTSP capture failed")
+                return float(cv2.Laplacian(img, cv2.CV_64F).var())
+
+        t_start = time.time()
+        af_state_at_exit = "off"
+
+        if af_off:
+            self._image.set_af(enable=False)
+            time.sleep(0.5)
+
+        # 2. anchor
+        for _ in range(anchor_steps):
+            self._control.focus(anchor_direction, autostop_ms=step_ms)
+        time.sleep(1.5)
+
+        # 3. sweep
+        history: list[list[float]] = []
+        for i in range(sweep_steps):
+            self._control.focus(sweep_dir, autostop_ms=step_ms)
+            time.sleep(settle_per_step_s)
+            v = _measure()
+            history.append([i, round(v, 1)])
+
+        # 4. peak
+        peak_step, peak_var = max(history, key=lambda x: x[1])
+
+        # 5. 복귀 — anchor 방향으로 (sweep_steps - peak_step - 1) step
+        undo_steps = sweep_steps - peak_step - 1
+        for _ in range(undo_steps):
+            self._control.focus(anchor_direction, autostop_ms=step_ms)
+        time.sleep(1.5)
+        final_var = _measure()
+
+        # 6. fine tune — sweep 방향 1 step 시도
+        fine_tune_applied = 0
+        if fine_tune:
+            self._control.focus(sweep_dir, autostop_ms=step_ms)
+            time.sleep(1.0)
+            v_plus = _measure()
+            if v_plus >= final_var:
+                final_var = v_plus
+                fine_tune_applied = 1
+            else:
+                # 원위치 복귀
+                self._control.focus(anchor_direction, autostop_ms=step_ms)
+                time.sleep(1.0)
+                final_var = _measure()
+
+        # 7. AF 복원 (옵션)
+        if restore_af:
+            self._image.set_af(enable=True)
+            af_state_at_exit = "on"
+
+        return {
+            "anchor_direction": anchor_direction,
+            "sweep_history": history,
+            "peak_step": peak_step,
+            "peak_var": round(peak_var, 1),
+            "final_var": round(final_var, 1),
+            "fine_tune_applied": fine_tune_applied,
+            "duration_s": round(time.time() - t_start, 1),
+            "af_state_at_exit": af_state_at_exit,
+        }
+
     def move(self, direction: str, speed: int = 5, ms: int = 500) -> None:
         self._control.move(direction, speed=speed, autostop_ms=ms)
 
