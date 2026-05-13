@@ -499,6 +499,57 @@ time.sleep(13.5)
 ### 시각 자료
 `/tmp/zoom_cap_check/state_0.jpg` (시작 tele) vs `state_5.jpg` (5회 청크 후 wide).
 
+## 8.G 모터 실제 full travel = ~6.5s, 이전 25s 가정은 artifact (2026-05-13)
+
+### 발견
+
+사용자 제보: 카메라 OSD가 표시하는 KF 카운터의 최댓값은 **36**. 이전 측정에서 SCF `multiple_max=10.0`(광학 배율)과 별개의 KF 카운터(1~36)가 존재한다.
+
+KF 누적 실측 (anchor_wide 후 `zoom_in(500ms)` × 12회, 각 직후 KF OSD 캡처):
+
+| 누적 motor time | Observed KF | Δ KF/500ms |
+|---|---|---|
+| 0 ms | 1 (anchor) | — |
+| 500 ms | 4 | +3 |
+| 1000 ms | 6 | +2 |
+| 2000 ms | 11 | +5 (=2.5/500ms) |
+| 3000 ms | 17 | +6 |
+| 4000 ms | 22 | +5 |
+| 5000 ms | 28 | +6 |
+| 6000 ms | 34 | +6 |
+
+**평균 ~185ms / KF**. 사용자 가설 "500ms당 +3 KF" 거의 정확.
+
+### 의미
+
+Motor full range (KF 1→36 = 35 KF) = 35 × 185 ≈ **6500 ms motor time**.
+
+이전 §8.E/§8.F 의 "25s full travel" 가정은 **chunked 명령들이 motor saturated 후에도 발사된 artifact**였음. 실제로는 ~6.5s에 motor가 saturate하고, 이후 19초+ 의 chunked 명령은 wasted no-op.
+
+### Rapid-fire 검증
+
+13회 × `zoom_in(500ms)` back-to-back (sleep 없음) → 8.2초 wall clock으로 KF 1→36 완전 도달 시각 확정. HAPI 호출이 각 500ms를 block하는 동안 motor가 명령의 500ms autostop을 실행 → motor 사실상 연속 동작.
+
+### 라이브러리 변경
+
+- **`ZoomTracker`**: 광학 배율 1~10 모델 → KF 1~36 모델. `ms_per_kf=185` 기본값.
+- **`anchor_wide`/`anchor_tele`**: chunked 25s → rapid-fire 14×500ms (7.6s, 76% 단축).
+- **`zoom_in(ms)`/`zoom_out(ms)`**: short ms(≤4500)는 단일 호출 그대로, long ms는 rapid-fire 분할.
+- **`zoom_level`**: 1.0~36.0 KF 반환. `zoom_multiplier` property로 광학 배율(1.0x~10.0x) 환산.
+- **이전 `_zoom_chunks` / `full_travel_ms` / `chunk_settle_s` 등 청크 API 폐기**.
+
+`Camera(zoom_max_kf=36, zoom_ms_per_kf=185, zoom_max_optical_multiplier=10.0)` 생성자 인자가 신규.
+
+### 실측 (2026-05-13, 192.168.8.101)
+
+```
+anchor_wide()  -> 7.6s, zoom_level=KF 1.0   (광학 1.00x)
+anchor_tele()  -> 7.7s, zoom_level=KF 36.0  (광학 10.00x)
+                         시각 OSD: "KF 36X" 확인
+zoom_in(500)   x1 -> KF 1.0 → 3.7 (예상 +500/185=2.7)
+zoom_in(500)   x2 -> KF 3.7 → 6.4
+```
+
 ## 8.6 재현 명령
 
 ```bash

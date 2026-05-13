@@ -426,7 +426,70 @@ res = cam.wait_for_af_lock(min_var=base * 0.7)
 | `warmup_s` | 측정 시작 전 grace | 0.3~1.0s |
 | `min_var` | lock 인정 최소 variance | None 또는 baseline의 50~70% |
 
-## 12. SW-side 줌 배율 추정 (`zoom_level`, `anchor_wide/tele`)
+## 12. SW-side 줌 KF 추정 (`zoom_level`, `zoom_multiplier`, `anchor_wide/tele`)
+
+### KF 모델 (2026-05-13 재설계)
+
+본 카메라 OSD는 zoom 위치를 **KF 1~36** 단위로 표시한다 (광학 1x~10x와 별개의 카운터). 라이브러리는 이 KF를 SW estimate 단위로 사용한다.
+
+캘리브레이션 (실측):
+- **500ms motor time = +3 KF**, 즉 `ms_per_kf ≈ 185`
+- Motor full travel (KF 1↔36 = 35 KF) = **약 6.5초 motor time** (이전 25s 가정은 artifact)
+- `anchor_wide/tele` rapid-fire 14×500ms로 ~7.6초만에 hard-limit 완전 도달
+
+### API
+
+| 메서드 | 의미 |
+|---|---|
+| `cam.zoom_level -> float \| None` | 추정 KF (1.0~36.0). `None`이면 미앵커 |
+| `cam.zoom_multiplier -> float \| None` | KF에서 선형 환산된 광학 배율 (1.0x~10.0x) |
+| `cam.anchor_wide()` | rapid-fire 14×500ms zoom_out → KF=1.0 (~7.6s) |
+| `cam.anchor_tele()` | rapid-fire 14×500ms zoom_in → KF=max_kf (~7.6s) |
+| `cam.set_zoom_estimate(kf)` | KF 직접 주입 (1~max_kf) |
+| `cam.zoom_in(ms)` / `cam.zoom_out(ms)` | 명령 + estimate 자동 갱신 (ms/185 KF) |
+| `cam.preset_call(n)` | 발사 + estimate invalidate |
+
+### 생성자 인자
+
+| 파라미터 | 디폴트 | 의미 |
+|---|---|---|
+| `zoom_max_kf` | 36 | OSD KF 상한 (AS500J/MC800S5) |
+| `zoom_ms_per_kf` | 185 | KF당 motor 시간. 실측 평균 |
+| `zoom_max_optical_multiplier` | 10.0 | SCF `multiple_max` |
+
+### 사용 패턴
+
+```python
+cam = Camera("192.168.8.101")
+cam.anchor_wide()                  # ~7.6초, KF=1
+print(cam.zoom_level)              # 1.0
+print(cam.zoom_multiplier)         # 1.00x
+
+cam.zoom_in(1000)                  # motor 1초 → +5.4 KF
+print(cam.zoom_level)              # 6.4
+print(cam.zoom_multiplier)         # 2.39x
+
+cam.anchor_tele()                  # ~7.6초, KF=36
+print(cam.zoom_level, cam.zoom_multiplier)  # 36.0, 10.00x
+```
+
+### Rapid-fire 메커니즘
+
+`anchor_*`는 내부 `_zoom_rapid()` helper로 `zoom_in/zoom_out(autostop_ms=500)`을 N회 sleep 없이 발사. HAPI 호출이 ~500ms를 block하는 동안 motor는 명령의 500ms autostop을 실행하므로 motor는 사실상 연속 동작. 이전 chunked 방식 (HAPI 5s cap 우회용)에서 32s 걸리던 anchor가 7.6s로 단축됨 (`docs/08 §8.G`).
+
+### 정확도
+
+- 캘리브레이션 (185 ms/KF) 기반 추정 ±5~10%
+- 매 `anchor_*` 호출 시 drift 0으로 리셋
+- motor backlash·AF re-engage로 소수점 KF 불일치 가능 — `int(zoom_level)` 권장
+
+### 11.A `wait_for_af_lock()` 한계와 사용 가이드 — DEPRECATED
+
+(아래 §12.0 이전 내용은 KF 모델 도입 전 작성. 일부 표현이 이전 multiplier 모델 기준)
+
+---
+
+## 12.0 (DEPRECATED) 이전 multiplier 모델
 
 본 카메라는 모터 absolute encoder를 어느 채널로도 노출하지 않는다 (`docs/08 §8.5`, `§8.D`). 따라서 정확한 모터 위치 읽기는 불가능. `Camera.zoom_level`은 **클라이언트 측 시간 적분 추정**을 반환한다.
 
