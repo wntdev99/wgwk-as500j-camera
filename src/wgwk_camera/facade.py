@@ -194,9 +194,9 @@ class Camera:
 
     # HAPI 펌웨어가 단일 zoom 명령의 autostop_ms를 ~5초로 내부 cap. 12s를
     # 요청해도 ~5s만 처리. 따라서 hard-limit 도달은 짧은 청크 반복 필요.
-    # `docs/08 §8.F` 참조.
-    _ZOOM_CHUNK_MS = 4000          # 5s cap 하한 + 안전 마진
-    _ZOOM_CHUNK_IDLE_MS = 400      # 청크 사이 idle (펌웨어 다음 명령 수락 보장)
+    # `docs/08 §8.F` 참조. 청크 파라미터는 실측 기반 최적화.
+    _ZOOM_CHUNK_MS = 4500          # 5s cap 안전 마진 10% (이전 4000 → 청크 1개 절감)
+    _ZOOM_CHUNK_IDLE_MS = 100      # 청크 사이 idle (이전 400 → 청크당 0.3s 절감)
 
     def _zoom_chunks(self, direction: str, total_ms: int) -> None:
         """zoom 명령을 4s 청크 × N으로 분할 발사. HAPI 단일 cap 우회."""
@@ -208,7 +208,7 @@ class Camera:
             remaining -= chunk
 
     def anchor_wide(self, *, hard_limit_ms: int = 25000,
-                    settle_extra_s: float = 2.0) -> None:
+                    settle_extra_s: float = 0.5) -> None:
         """광각 끝까지 이동 후 추정을 `min_multiplier`(=1.0)로 고정.
 
         HAPI 단일 zoom 명령 ~5초 cap 때문에 내부적으로 청크 분할 발사한다.
@@ -225,7 +225,7 @@ class Camera:
         self._zoom.anchor_wide()
 
     def anchor_tele(self, *, hard_limit_ms: int = 25000,
-                    settle_extra_s: float = 2.0) -> None:
+                    settle_extra_s: float = 0.5) -> None:
         """망원 끝까지 이동 후 추정을 `max_multiplier`(=10.0)로 고정.
 
         HAPI 단일 zoom 명령 ~5초 cap 때문에 내부적으로 청크 분할 발사한다.
