@@ -458,15 +458,20 @@ if 어떤_조건:
     cam.anchor_wide()   # 추정 재초기화
 ```
 
+### HAPI 단일 zoom 명령 ~5s cap — 청크 자동 분할
+
+본 카메라 펌웨어는 `autostop_ms` 파라미터에 약 5초의 내부 cap이 있어 단일 `zoom_out(25000)` 호출도 ~5s만 처리. 라이브러리는 `_zoom_chunks()` 내부 helper로 4s 청크 + 0.4s idle 반복 발사해 이 cap을 우회한다. 사용자는 의식할 필요 없음 — `anchor_wide/anchor_tele/calibrate_zoom_travel`가 모두 자동.
+
 ### 정확도 한계 및 캘리브레이션
 
-본 카메라(MC800S5 V3.4.5.2) 실측 결과 (2026-05-13):
-- `anchor_wide()` 후 `zoom_in(25000ms)` 발사하며 1초 간격 프레임 히스토그램 변화 추적
-- 모터 saturation (delta가 noise floor로 떨어지는 시점):
-  - **zoom_in 방향: ~9.8s ~ 10.8s** (개체/시점별 변동)
-  - **zoom_out 방향: ~7.7s ~ 7.9s**
-  - 평균 ~8.8 ~ 9.4s, 모터 in/out 비대칭 약 15~30%
-- 기본값 `full_travel_ms=9000` 은 이 평균. 카메라 개체별 calibration 권장.
+본 카메라(MC800S5 V3.4.5.2) 시각 검증 결과 (2026-05-13):
+- 청크 방식 5s × 5회 (`anchor_wide` 25000ms와 등가) → **wide hard-limit 완전 도달**
+- 시각 비교: `tmp/zoom_cap_check/state_0.jpg` (tele) ↔ `state_5.jpg` (완전 wide)
+- 기본값 `full_travel_ms=25000` 은 이 시각 확정값.
+
+캘리브레이션 자동화 (`Camera.calibrate_zoom_travel()`)는 청크 방식으로 동작하지만 **AF 활동으로 인한 frame noise** 때문에 saturation 자동 식별 신뢰성이 낮다. 실측에서 40s 청크까지도 delta가 0.05~0.11 수준으로 saturation 판정 임계 위에 머묾. 결과: 권장값 신뢰 어려우니 **시각 검증으로 확정 권장**.
+
+이전 (2026-05-12) calibrate 결과 (in=9.8s, out=7.7s)는 HAPI 단일 cap을 모르고 측정한 값이라 **무효**. 그 측정은 사실 펌웨어 cap 시점을 잡은 것.
 
 #### 자동 캘리브레이션 — `Camera.calibrate_zoom_travel()`
 
@@ -521,5 +526,5 @@ result = cam.calibrate_zoom_travel(direction="both")
 
 | 파라미터 | 디폴트 | 의미 |
 |---|---|---|
-| `zoom_full_travel_ms` | 9000 | wide↔tele 전체 이동 시간. 본 카메라 실측 평균 (in≈9800, out≈7700). **카메라별 실측 권장** |
+| `zoom_full_travel_ms` | 25000 | wide↔tele 전체 이동 시간. 시각 검증값 (`docs/08 §8.F`). HAPI ~5s cap 우회용 청크 자동 분할 |
 | `zoom_max_multiplier` | 10.0 | SCF `multiple_max` 값. AS500J/MC800S5 = 10x |

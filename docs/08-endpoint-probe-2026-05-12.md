@@ -453,6 +453,52 @@ ZoomTracker(`docs/09 §12`)의 `full_travel_ms` 파라미터 실측. 모터 satu
 - docs/09 §12에 캘리브레이션 절차 코드 예시 추가
 - 캡처 파일: `/tmp/zoom_calib_2026_05_13/`
 
+## 8.F HAPI zoom 명령 단일 호출 ~5s 내부 cap (2026-05-13)
+
+### 발견 경위
+
+`Camera.anchor_wide(hard_limit_ms=12000)` 호출 후 영상이 여전히 zoom-in 상태. `zoom_out(12000)` 단일 명령이 전체 12s 동안 모터를 움직이지 않음을 확인.
+
+### 검증
+
+5s 청크 5회 반복:
+```python
+for _ in range(5):
+    cam.zoom_out(5000)
+    time.sleep(5.5)
+    cam.stop()
+    time.sleep(1.0)
+# 결과: 작업장 전체 시야 확보 — 완벽한 wide-end 도달
+```
+
+대조군 (단일 12s):
+```python
+cam.zoom_out(12000)
+time.sleep(13.5)
+# 결과: 모터가 일부만 이동 (~5s 분량) 후 정지
+```
+
+### 결론
+
+**HAPI 펌웨어가 단일 zoom 명령의 `autostop_ms` 파라미터를 약 5초로 내부 cap**. 12초·25초를 요청해도 실제로는 ~5s만 처리. 사양서에 명시되지 않은 펌웨어 동작.
+
+### 라이브러리 영향
+
+- `Camera.anchor_wide()` / `anchor_tele()` — 청크 분할 발사로 리팩터 (`_zoom_chunks()` 도입). 기본 4s 청크 + 0.4s idle.
+- `Camera.calibrate_zoom_travel()` — 청크 기반 측정으로 변경. 단, AF 활동으로 인한 노이즈 때문에 saturation 자동 식별 신뢰성 낮음 (delta-based 알고리즘 한계).
+- 이전 `calibrate_zoom_travel` 결과 (9000ms) **무효** — 단일 명령 cap 때문에 측정 자체가 잘못된 값이었음.
+- 시각 검증으로 확정된 실제 full_travel ≈ **25000ms** (5s × 5회 청크). 기본값 25000으로 갱신.
+
+### 청크 파라미터 (실측 기반)
+| 파라미터 | 값 | 근거 |
+|---|---|---|
+| `_ZOOM_CHUNK_MS` | 4000 | 5s cap 안전 마진 (20%) |
+| `_ZOOM_CHUNK_IDLE_MS` | 400 | 다음 명령 수락 보장 |
+| 기본 `full_travel_ms` | 25000 | 5s × 5회 = wide-end 완전 도달 시각 검증 |
+
+### 시각 자료
+`/tmp/zoom_cap_check/state_0.jpg` (시작 tele) vs `state_5.jpg` (5회 청크 후 wide).
+
 ## 8.6 재현 명령
 
 ```bash

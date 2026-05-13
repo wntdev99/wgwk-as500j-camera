@@ -80,7 +80,7 @@ class Camera:
         auto_login: bool = True,
         preflight: bool = True,
         preflight_timeout: float = 2.0,
-        zoom_full_travel_ms: int = 9000,
+        zoom_full_travel_ms: int = 25000,
         zoom_max_multiplier: float = 10.0,
     ) -> None:
         """
@@ -89,10 +89,10 @@ class Camera:
                 안 하면 즉시 CameraError. False면 첫 메서드 호출까지 지연.
             preflight_timeout: 도달성 확인 timeout (초).
             auto_login: True(기본)면 preflight 통과 후 HAPI 로그인 + keep_alive.
-            zoom_full_travel_ms: wide↔tele 전체 이동 시간 (ms). 기본 9000ms는
-                본 카메라(MC800S5 V3.4.5.2) 실측 캘리브레이션 결과의 평균값
-                (zoom_in≈9800ms, zoom_out≈7700ms). 카메라 개체별로 실측 권장.
-                `docs/09 §12` 캘리브레이션 절차 참조.
+            zoom_full_travel_ms: wide↔tele 전체 이동 시간 (ms). 기본 25000ms는
+                본 카메라(MC800S5 V3.4.5.2) 시각 검증값 (5s × 5회 청크로 wide
+                hard-limit 완전 도달, `docs/08 §8.F`). HAPI 단일 명령 ~5s cap이
+                있어 라이브러리가 자동으로 4s 청크 분할 발사.
             zoom_max_multiplier: 최대 줌 배율 (기본 10x — SCF `multiple_max` 값).
         """
         if preflight:
@@ -174,26 +174,47 @@ class Camera:
         """
         return self._zoom.estimate
 
-    def anchor_wide(self, *, hard_limit_ms: int = 15000,
+    # HAPI 펌웨어가 단일 zoom 명령의 autostop_ms를 ~5초로 내부 cap. 12s를
+    # 요청해도 ~5s만 처리. 따라서 hard-limit 도달은 짧은 청크 반복 필요.
+    # `docs/08 §8.F` 참조.
+    _ZOOM_CHUNK_MS = 4000          # 5s cap 하한 + 안전 마진
+    _ZOOM_CHUNK_IDLE_MS = 400      # 청크 사이 idle (펌웨어 다음 명령 수락 보장)
+
+    def _zoom_chunks(self, direction: str, total_ms: int) -> None:
+        """zoom 명령을 4s 청크 × N으로 분할 발사. HAPI 단일 cap 우회."""
+        remaining = total_ms
+        while remaining > 0:
+            chunk = min(self._ZOOM_CHUNK_MS, remaining)
+            self._control.zoom(direction, autostop_ms=chunk)
+            time.sleep(chunk / 1000 + self._ZOOM_CHUNK_IDLE_MS / 1000)
+            remaining -= chunk
+
+    def anchor_wide(self, *, hard_limit_ms: int = 25000,
                     settle_extra_s: float = 2.0) -> None:
         """광각 끝까지 이동 후 추정을 `min_multiplier`(=1.0)로 고정.
 
-        `hard_limit_ms`는 모터 전체 이동 시간 + 마진. 이 시간 후엔 모터가 wide
-        hard-limit에 saturate된 상태가 보장된다.
+        HAPI 단일 zoom 명령 ~5초 cap 때문에 내부적으로 청크 분할 발사한다.
+        `hard_limit_ms` 동안 청크 반복 → 모터가 wide hard-limit에 saturate.
 
         Args:
-            hard_limit_ms: zoom_out 발사 시간 (기본 15s — full travel 12s+여유).
-            settle_extra_s: hard_limit 후 모터·AF settle 대기 (기본 2s).
+            hard_limit_ms: zoom_out 총 발사 시간 (기본 25s — 본 카메라 full
+                travel 추정값 + 마진). 청크 단위로 분할되어 실제 wall clock은
+                약간 더 길다.
+            settle_extra_s: hard_limit 후 모터·AF settle 대기.
         """
-        self._control.zoom("out", autostop_ms=hard_limit_ms)
-        time.sleep(hard_limit_ms / 1000 + settle_extra_s)
+        self._zoom_chunks("out", hard_limit_ms)
+        time.sleep(settle_extra_s)
         self._zoom.anchor_wide()
 
-    def anchor_tele(self, *, hard_limit_ms: int = 15000,
+    def anchor_tele(self, *, hard_limit_ms: int = 25000,
                     settle_extra_s: float = 2.0) -> None:
-        """망원 끝까지 이동 후 추정을 `max_multiplier`(=10.0)로 고정."""
-        self._control.zoom("in", autostop_ms=hard_limit_ms)
-        time.sleep(hard_limit_ms / 1000 + settle_extra_s)
+        """망원 끝까지 이동 후 추정을 `max_multiplier`(=10.0)로 고정.
+
+        HAPI 단일 zoom 명령 ~5초 cap 때문에 내부적으로 청크 분할 발사한다.
+        `docs/08 §8.F` 참조.
+        """
+        self._zoom_chunks("in", hard_limit_ms)
+        time.sleep(settle_extra_s)
         self._zoom.anchor_tele()
 
     def set_zoom_estimate(self, multiplier: float) -> None:
@@ -204,33 +225,37 @@ class Camera:
         self,
         *,
         direction: str = "both",
-        max_motion_s: float = 25.0,
-        sample_interval_s: float = 1.0,
-        saturation_window: int = 3,
-        anchor_settle_extra_s: float = 3.0,
+        max_chunks: int = 10,
+        chunk_ms: int | None = None,
+        chunk_settle_s: float = 1.5,
+        anchor_settle_extra_s: float = 2.0,
+        saturation_window: int = 2,
+        rel_threshold: float = 0.02,
         update_tracker: bool = True,
     ) -> dict[str, Any]:
-        """모터 wide↔tele 전체 이동 시간 자동 측정.
+        """모터 wide↔tele 전체 이동 시간 자동 측정 (청크 방식).
 
-        절차:
-          1. `anchor_wide()` (또는 `anchor_tele()`) 로 한쪽 hard-limit 도달
-          2. 반대 방향으로 `max_motion_s` 길이의 단일 zoom 명령 발사
-          3. `sample_interval_s` 간격으로 메인 스트림 프레임을 ffmpeg로 캡처
-          4. 인접 프레임의 16-bin 그레이스케일 히스토그램 L1 distance 측정
-          5. noise floor(말미 5개 평균) × 2 를 임계로, `saturation_window`개
-             연속 샘플이 임계 이하인 첫 시점 = 모터 saturation
-          6. `direction='both'`(기본)이면 양 방향 측정 후 평균을 추천값으로 반환
+        HAPI 단일 zoom 명령에 ~5초 cap이 있어 25s를 한 번에 발사해도 5s만
+        처리된다 (`docs/08 §8.F`). 이 메서드는 짧은 청크를 반복 발사하며 각
+        청크 후 프레임을 캡처해 모터가 이동했는지 판정한다.
+
+        절차 (한 방향):
+          1. 반대쪽 hard-limit으로 anchor (예: `anchor_wide` 후 zoom_in 측정)
+          2. baseline 프레임 캡처
+          3. 청크 1회 발사 → settle → 캡처 → baseline 대비 히스토그램 L1
+          4. 직전 청크 대비 delta가 `rel_threshold` 이하이면 saturation 카운트++
+          5. saturation 카운트가 `saturation_window` 도달 시 종료
+          6. `full_travel_ms` = (마지막 motion 청크 인덱스) × `chunk_ms`
 
         Args:
             direction: `"in"`, `"out"`, 또는 `"both"`.
-            max_motion_s: 한 방향 모터 명령 시간. saturation 도달 보장 위해
-                실제 full travel보다 충분히 길게 (기본 25s).
-            sample_interval_s: 프레임 sampling 간격. ffmpeg overhead ~0.5~1s이므로
-                너무 작게 잡지 말 것.
-            saturation_window: 안정 판정 연속 샘플 수.
-            anchor_settle_extra_s: 각 측정 전 anchor 후 추가 settle 대기.
-            update_tracker: True(기본)면 측정값(both면 평균)으로
-                `self._zoom.full_travel_ms` 자동 갱신.
+            max_chunks: 최대 청크 수. 기본 10 × 4s = 40s 까지 측정.
+            chunk_ms: 청크 크기. None(기본)이면 `_ZOOM_CHUNK_MS`(=4000).
+            chunk_settle_s: 청크 후 모터·AF·RTSP 버퍼 settle 대기.
+            anchor_settle_extra_s: 각 방향 측정 전 anchor 후 추가 대기.
+            saturation_window: 연속 N개 청크가 motion 없을 때 saturation 판정.
+            rel_threshold: 인접 청크 히스토그램 L1 임계. 이하면 motion 없음 판정.
+            update_tracker: True(기본)면 측정값으로 `self._zoom.full_travel_ms` 갱신.
 
         Returns:
             ```
@@ -238,33 +263,33 @@ class Camera:
                 "zoom_in_ms": int | None,
                 "zoom_out_ms": int | None,
                 "recommended_ms": int,
-                "asymmetry_pct": float | None,  # |in-out|/avg
-                "history_in":  list[[t, delta]],
-                "history_out": list[[t, delta]],
+                "asymmetry_pct": float | None,
+                "history_in":  list[[chunk_idx, cum_ms, delta_from_prev]],
+                "history_out": list[[chunk_idx, cum_ms, delta_from_prev]],
                 "updated": bool,
+                "chunk_ms": int,
             }
             ```
-            `*_ms`가 `None`이면 해당 방향 측정 실패 (saturation 미감지).
 
         Raises:
             CameraError: cv2(opencv-python) 미설치 또는 RTSP 캡처 실패.
 
         Note:
-            전체 소요 시간 ~1분(both 방향). 정적 장면 권장 (동적 장면은 noise
-            증가로 saturation 식별 실패 가능). 모터 비선형 거동으로 in/out이
-            10~20% 차이 나는 게 정상.
+            both 방향 약 2~3분 소요 (max_chunks × chunk_ms × 2 + anchor 시간).
+            정적 장면 권장.
         """
         try:
             import cv2
             import numpy as np
         except ImportError as e:
             raise CameraError(
-                "calibrate_zoom_travel requires opencv-python + numpy. "
-                "Install: pip install opencv-python numpy"
+                "calibrate_zoom_travel requires opencv-python + numpy."
             ) from e
 
         if direction not in ("in", "out", "both"):
             raise ValueError("direction must be 'in', 'out', or 'both'")
+        if chunk_ms is None:
+            chunk_ms = self._ZOOM_CHUNK_MS
 
         def _hist(gray):
             h = cv2.calcHist([gray], [0], None, [16], [0, 256]).flatten()
@@ -276,46 +301,42 @@ class Camera:
                 self.video_main().ffmpeg_grab_frame(f.name)
                 return cv2.imread(f.name, cv2.IMREAD_GRAYSCALE)
 
-        def _measure_one(setup_fn, motion_fn) -> tuple[int | None, list[list[float]]]:
-            """한 방향 측정. setup_fn: anchor. motion_fn: 반대 방향 큰 명령."""
+        def _measure_one(setup_fn, move_one_chunk_fn):
+            """한 방향 청크 반복 측정."""
             setup_fn()
             time.sleep(anchor_settle_extra_s)
 
-            g0 = _capture_gray()
-            if g0 is None:
-                raise CameraError("calibrate_zoom_travel: RTSP frame capture failed")
-            prev_hist = _hist(g0)
+            g_prev = _capture_gray()
+            if g_prev is None:
+                raise CameraError("calibrate: RTSP frame capture failed")
+            h_prev = _hist(g_prev)
 
-            motion_fn()
-            t0 = time.time()
             history: list[list[float]] = []
-            target = sample_interval_s
-            while time.time() - t0 < max_motion_s + sample_interval_s:
-                now = time.time() - t0
-                if now < target:
-                    time.sleep(0.05)
-                    continue
+            sat_count = 0
+            last_motion_chunk = 0
+            for i in range(1, max_chunks + 1):
+                move_one_chunk_fn()           # zoom_in/out chunk_ms
+                time.sleep(chunk_settle_s)
                 g = _capture_gray()
-                t_actual = time.time() - t0
                 if g is None:
-                    target = int(t_actual) + sample_interval_s
                     continue
                 h = _hist(g)
-                d = float(np.abs(prev_hist - h).sum())
-                history.append([round(t_actual, 2), round(d, 4)])
-                prev_hist = h
-                target = int(t_actual) + sample_interval_s
+                d = float(np.abs(h_prev - h).sum())
+                cum_ms = i * chunk_ms
+                history.append([i, cum_ms, round(d, 4)])
+                if d <= rel_threshold:
+                    sat_count += 1
+                    if sat_count >= saturation_window:
+                        # saturation 확정 — full_travel = 마지막 motion 청크 끝
+                        return last_motion_chunk * chunk_ms, history
+                else:
+                    sat_count = 0
+                    last_motion_chunk = i
+                h_prev = h
 
-            # saturation 분석
-            if len(history) < saturation_window + 2:
-                return None, history
-            tail_n = min(5, len(history))
-            noise = sum(d for _, d in history[-tail_n:]) / tail_n
-            threshold = max(noise * 2.0, 0.005)
-            for i in range(len(history) - saturation_window + 1):
-                window = history[i:i + saturation_window]
-                if all(d <= threshold for _, d in window):
-                    return int(window[0][0] * 1000), history
+            # max_chunks 도달했는데 saturation 미확정
+            if last_motion_chunk > 0:
+                return last_motion_chunk * chunk_ms, history
             return None, history
 
         result: dict[str, Any] = {
@@ -325,26 +346,30 @@ class Camera:
             "history_out": [],
             "updated": False,
             "asymmetry_pct": None,
+            "chunk_ms": chunk_ms,
             "recommended_ms": self._zoom.full_travel_ms,
         }
 
         if direction in ("in", "both"):
             in_ms, hist_in = _measure_one(
-                setup_fn=lambda: self.anchor_wide(hard_limit_ms=15000, settle_extra_s=0),
-                motion_fn=lambda: self.zoom_in(int(max_motion_s * 1000)),
+                setup_fn=lambda: self.anchor_wide(
+                    hard_limit_ms=max_chunks * chunk_ms, settle_extra_s=0
+                ),
+                move_one_chunk_fn=lambda: self._zoom_chunks("in", chunk_ms),
             )
             result["zoom_in_ms"] = in_ms
             result["history_in"] = hist_in
 
         if direction in ("out", "both"):
             out_ms, hist_out = _measure_one(
-                setup_fn=lambda: self.anchor_tele(hard_limit_ms=15000, settle_extra_s=0),
-                motion_fn=lambda: self.zoom_out(int(max_motion_s * 1000)),
+                setup_fn=lambda: self.anchor_tele(
+                    hard_limit_ms=max_chunks * chunk_ms, settle_extra_s=0
+                ),
+                move_one_chunk_fn=lambda: self._zoom_chunks("out", chunk_ms),
             )
             result["zoom_out_ms"] = out_ms
             result["history_out"] = hist_out
 
-        # 권장값 산정
         a, b = result["zoom_in_ms"], result["zoom_out_ms"]
         if a is not None and b is not None:
             result["recommended_ms"] = (a + b) // 2
@@ -353,7 +378,6 @@ class Camera:
             result["recommended_ms"] = a
         elif b is not None:
             result["recommended_ms"] = b
-        # else: 둘 다 None → 기존 값 유지
 
         if update_tracker and (a is not None or b is not None):
             self._zoom.full_travel_ms = result["recommended_ms"]
