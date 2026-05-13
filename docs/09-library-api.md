@@ -460,7 +460,20 @@ if 어떤_조건:
 
 ### HAPI 단일 zoom 명령 ~5s cap — 청크 자동 분할
 
-본 카메라 펌웨어는 `autostop_ms` 파라미터에 약 5초의 내부 cap이 있어 단일 `zoom_out(25000)` 호출도 ~5s만 처리. 라이브러리는 `_zoom_chunks()` 내부 helper로 4s 청크 + 0.4s idle 반복 발사해 이 cap을 우회한다. 사용자는 의식할 필요 없음 — `anchor_wide/anchor_tele/calibrate_zoom_travel`가 모두 자동.
+본 카메라 펌웨어는 `autostop_ms` 파라미터에 약 5초의 내부 cap이 있어 단일 `zoom_out(25000)` 호출도 ~5s만 처리. 라이브러리는 `_zoom_chunks()` 내부 helper로 4s 청크 + 0.4s idle 반복 발사해 이 cap을 우회한다.
+
+**자동 적용 범위**:
+- `anchor_wide()` / `anchor_tele()` / `calibrate_zoom_travel()` — 항상 청크 사용
+- `zoom_in(ms)` / `zoom_out(ms)`:
+  - `ms ≤ 4000`: 기존대로 단일 HAPI 호출, **non-blocking** (호환성 유지)
+  - `ms > 4000`: 자동 청크 분할, **blocking** — 전체 모션 끝까지 대기
+
+실측 (192.168.8.101):
+```
+zoom_in(500)    : 506ms wall clock   (non-blocking)
+zoom_in(10000)  : ~14s wall clock    (3 chunks blocking)
+zoom_out(15000) : ~21s wall clock    (4 chunks blocking)
+```
 
 ### 정확도 한계 및 캘리브레이션
 

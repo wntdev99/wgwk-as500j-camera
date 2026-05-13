@@ -152,11 +152,29 @@ class Camera:
     # ─── 런타임 — 줌 / 포커스 / 프리셋 / 스냅샷 ────────────
 
     def zoom_in(self, ms: int = 500) -> None:
-        self._control.zoom("in", autostop_ms=ms)
+        """줌 인. `ms` 시간만큼 모터 이동.
+
+        - `ms ≤ 4000`: 단일 HAPI 호출, **non-blocking** — 명령만 발사하고 즉시 반환
+        - `ms > 4000`: 4s 청크로 자동 분할 + 청크 사이 idle. **blocking** —
+          전체 모션이 끝날 때까지 대기. HAPI 펌웨어의 단일 호출 ~5s cap을
+          우회하기 위함 (`docs/08 §8.F`).
+        """
+        if ms > self._ZOOM_CHUNK_MS:
+            self._zoom_chunks("in", ms)
+        else:
+            self._control.zoom("in", autostop_ms=ms)
         self._zoom.apply_zoom_in(ms)
 
     def zoom_out(self, ms: int = 500) -> None:
-        self._control.zoom("out", autostop_ms=ms)
+        """줌 아웃. `ms` 시간만큼 모터 이동.
+
+        - `ms ≤ 4000`: 단일 HAPI 호출, **non-blocking**
+        - `ms > 4000`: 4s 청크로 자동 분할 + idle. **blocking** (HAPI ~5s cap 우회).
+        """
+        if ms > self._ZOOM_CHUNK_MS:
+            self._zoom_chunks("out", ms)
+        else:
+            self._control.zoom("out", autostop_ms=ms)
         self._zoom.apply_zoom_out(ms)
 
     def zoom_stop(self) -> None:
